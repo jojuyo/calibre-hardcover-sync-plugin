@@ -1,0 +1,26 @@
+# Devenv
+.devenv*
+devenv.local.nix
+
+# direnv
+.direnv
+
+# Python
+**/__pycache__/*
+.venv/
+dist/
+.build/
+.ruff-cache/
+.pytest-cache/
+*.egg-info/
+.coverage
+build/
+_version.py
+
+# Task
+.task/
+
+.env
+
+# Lefthook
+.lefthook-local.y*ml

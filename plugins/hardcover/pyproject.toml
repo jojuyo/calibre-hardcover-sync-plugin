@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools", "versioningit"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hardcover"
+dynamic = ["version"]
+description = "Hardcover Metadata Source Plugin for Calibre"
+readme = "README.md"
+authors = [{ name = "Rob Brazier" }]
+requires-python = ">=3.9"
+dependencies = ["common", "graphql", "pyjarowinkler>=1.8"]
+
+[tool.uv.sources]
+common = { workspace = true }
+graphql = { workspace = true }
+
+[tool.versioningit.vcs]
+default-tag = "hardcover-0.0.0"
+match = ["hardcover-*"]
+decribe-subst = ""
+
+[tool.versioningit.tag2version]
+rmprefix = "hardcover-"
+
+[tool.versioningit.write]
+template = '''
+__version__ = "{version}"
+__version_tuple__ = {version_tuple}
+'''
+file = "src/hardcover/_version.py"
+
+[tool.ruff]
+builtins = ["_"]
+
+[tool.pyright]
+typeCheckingMode = "standard"

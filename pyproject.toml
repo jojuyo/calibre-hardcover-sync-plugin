@@ -1,0 +1,43 @@
+[project]
+name = "calibre-plugins"
+version = "0.0.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [{ name = "Rob Brazier" }]
+requires-python = ">=3.9"
+dependencies = ["pymarkdownlnt>=0.9.29", "pyqt5>=5.15.11"]
+
+[tool.uv.workspace]
+members = ["plugins/*", "libs/*"]
+
+[dependency-groups]
+dev = [
+    "gitlint>=0.19.1",
+    "lefthook>=1.8.4",
+    "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.0",
+    "pytest>=8.3.3",
+    "ruff>=0.8.1",
+    "msgpack>=1.1.0",
+    "lxml-stubs>=0.5.1",
+]
+
+[tool.coverage.run]
+branch = true
+omit = ["*test*"]
+source = ["libs", "plugins"]
+
+[tool.pytest.ini_options]
+addopts = "--cov -v --import-mode=importlib"
+
+[tool.ruff]
+builtins = ["_", "get_icons"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "S", "INT"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/test/**/test_*.py" = ["S101"]
+
+[tool.pyright]
+typeCheckingMode = "standard"
