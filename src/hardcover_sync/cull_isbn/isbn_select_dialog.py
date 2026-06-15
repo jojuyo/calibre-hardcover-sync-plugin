@@ -17,8 +17,8 @@ from qt.core import (
     pyqtSignal,
 )
 
-from calibre_plugins.hardcover_list._version import __version__
-from calibre_plugins.hardcover_list.cull_isbn.isbn_scan import FoundIsbn
+from calibre_plugins.hardcover_sync._version import __version__
+from calibre_plugins.hardcover_sync.cull_isbn.isbn_scan import FoundIsbn
 
 COVER_WIDTH = 56
 COVER_HEIGHT = 84
@@ -42,7 +42,7 @@ def _download_cover(url: str) -> bytes | None:
     if not url or not url.startswith(("http:", "https:")):
         return None
     # The Hardcover asset CDN returns 403 without a User-Agent header.
-    headers = {"User-Agent": f"hardcover-list-calibre-plugin/{__version__}"}
+    headers = {"User-Agent": f"hardcover-sync-calibre-plugin/{__version__}"}
     try:
         req = request.Request(url, headers=headers)  # noqa: S310
         with request.urlopen(req, timeout=20) as response:  # noqa: S310
@@ -154,7 +154,7 @@ class IsbnSelectDialog(QDialog):
         super().accept()
 
     def _lookup_worker(self) -> None:
-        from calibre_plugins.hardcover_list.cull_isbn.isbn_lookup import (
+        from calibre_plugins.hardcover_sync.cull_isbn.isbn_lookup import (
             lookup_isbn,
         )
 

@@ -14,7 +14,7 @@ from qt.core import (
     pyqtSignal,
 )
 
-from calibre_plugins.hardcover_list.book_details import (
+from calibre_plugins.hardcover_sync.book_details import (
     COLUMN_KEY,
     NOTES_COLUMN_KEY,
     QUOTES_COLUMN_KEY,
@@ -38,7 +38,7 @@ from calibre_plugins.hardcover_list.book_details import (
     review_value_to_slate,
     split_journal_entries,
 )
-from calibre_plugins.hardcover_list.lists import (
+from calibre_plugins.hardcover_sync.lists import (
     HardcoverListsClient,
     LOADING_TEXT,
     NO_IDENTIFIER,
@@ -53,24 +53,24 @@ from calibre_plugins.hardcover_list.lists import (
     lists_text_to_field_value,
     normalize_lists_display,
 )
-from calibre_plugins.hardcover_list.lists_cache import (
+from calibre_plugins.hardcover_sync.lists_cache import (
     get_cached_lists,
     restore_lists_cache_to_column,
     save_lists_cache_entry,
 )
-from calibre_plugins.hardcover_list.config import (
+from calibre_plugins.hardcover_sync.config import (
     auto_push_prompted,
     ensure_plugin_prefs,
     get_auto_push,
     set_auto_push,
     set_auto_push_prompted,
 )
-from calibre_plugins.hardcover_list.menu_setup import ensure_context_menu_action
-from calibre_plugins.hardcover_list.cull_isbn.isbn_select_dialog import (
+from calibre_plugins.hardcover_sync.menu_setup import ensure_context_menu_action
+from calibre_plugins.hardcover_sync.cull_isbn.isbn_select_dialog import (
     IsbnSelectDialog,
 )
-from calibre_plugins.hardcover_list.read_date_dialog import ReadDateDialog
-from calibre_plugins.hardcover_list.auto_push_dialog import ask_auto_push
+from calibre_plugins.hardcover_sync.read_date_dialog import ReadDateDialog
+from calibre_plugins.hardcover_sync.auto_push_dialog import ask_auto_push
 
 # Apply list results in small batches so multi-select updates show progress
 # without waiting for the entire selection to finish.
@@ -95,7 +95,7 @@ _SELF_WRITE_TTL = 30.0
 HARDCOVER_ERROR_MARK = "Hardcover sync error"
 
 
-class HardcoverListsAction(InterfaceAction):
+class HardcoverSyncAction(InterfaceAction):
     name = "Hardcover Sync"
     action_type = "current"
     popup_type = QToolButton.ToolButtonPopupMode.InstantPopup
@@ -3006,7 +3006,7 @@ class HardcoverListsAction(InterfaceAction):
         ).start()
 
     def _scan_book_for_isbns(self, scan_id: int, book_id: int):
-        from calibre_plugins.hardcover_list.cull_isbn.isbn_scan import (
+        from calibre_plugins.hardcover_sync.cull_isbn.isbn_scan import (
             find_isbns_for_book,
         )
 

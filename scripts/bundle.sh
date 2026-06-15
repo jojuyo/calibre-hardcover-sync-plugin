@@ -2,8 +2,8 @@
 
 base_dir="$(pwd)"
 dist_dir="$base_dir/dist"
-plugin_name="hardcover-list"
-package_name="hardcover_list"
+plugin_name="hardcover-sync"
+package_name="hardcover_sync"
 
 if [ ! -d "$dist_dir" ]; then
 	mkdir -p "$dist_dir"

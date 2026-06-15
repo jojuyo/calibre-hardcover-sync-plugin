@@ -35,7 +35,7 @@ build:
 
 # Build and install the plugin
 install-plugin: build
-    find dist -name 'hardcover-list-*.zip' | xargs calibre-customize --add-plugin
+    find dist -name 'hardcover-sync-*.zip' | xargs calibre-customize --add-plugin
 
 # Launch Calibre in Debug mode
 calibre *ARGS:
@@ -43,4 +43,4 @@ calibre *ARGS:
 
 # Bump the version, following SemVer
 bump:
-    bash scripts/bump.sh hardcover-list
+    bash scripts/bump.sh hardcover-sync

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-plugin_name="${1:-hardcover-list}"
+plugin_name="${1:-hardcover-sync}"
 
 cliff() {
 	git cliff --include-path "**/*" --tag-pattern "$plugin_name"'-*' $@

@@ -20,4 +20,4 @@ else
 	opts="--latest"
 fi
 
-gh release create "$tag" $opts -n "$contents" -t "$tag" dist/hardcover-list-*.zip
+gh release create "$tag" $opts -n "$contents" -t "$tag" dist/hardcover-sync-*.zip

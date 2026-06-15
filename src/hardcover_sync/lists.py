@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-from calibre_plugins.hardcover_list.hcl_graphql.client import GraphQLClient
+from calibre_plugins.hardcover_sync.hcl_graphql.client import GraphQLClient
 
 from ._version import __version__
 from .config import get_api_key
@@ -287,7 +287,7 @@ def _me_from_result(result: dict | None) -> dict | None:
 
 class HardcoverListsClient:
     def __init__(self, api_key: Optional[str] = None):
-        useragent = f"hardcover-list-calibre-plugin/{__version__}"
+        useragent = f"hardcover-sync-calibre-plugin/{__version__}"
         self.client = GraphQLClient(API_URL, useragent)
         self.client.set_token(api_key or get_api_key())
 

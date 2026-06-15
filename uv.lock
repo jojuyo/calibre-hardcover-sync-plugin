@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.9"
 resolution-markers = [
     "python_full_version >= '3.10'",
@@ -339,10 +339,10 @@ trusted-deps = [
 ]
 
 [[package]]
-name = "hardcover-list"
+name = "hardcover-sync"
 source = { editable = "." }
 dependencies = [
-    { name = "hardcover-list-graphql" },
+    { name = "hardcover-sync-graphql" },
 ]
 
 [package.dev-dependencies]
@@ -361,7 +361,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "hardcover-list-graphql", directory = "lib/graphql" }]
+requires-dist = [{ name = "hardcover-sync-graphql", directory = "lib/graphql" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -378,7 +378,7 @@ dev = [
 ]
 
 [[package]]
-name = "hardcover-list-graphql"
+name = "hardcover-sync-graphql"
 version = "0.1.0"
 source = { directory = "lib/graphql" }
 

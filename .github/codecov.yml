@@ -3,8 +3,8 @@ comment:
 
 component_management:
   individual_components:
-    - component_id: hardcover_list
-      name: hardcover-list
+    - component_id: hardcover_sync
+      name: hardcover-sync
       paths:
         - src/**
         - lib/**

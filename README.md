@@ -34,7 +34,7 @@ limits are shared between the two plugins via a lock file.
 ## Installation & first-time setup
 
 1. **Install the plugin.** In Calibre, go to **Preferences → Plugins → Load
-   plugin from file** and select `hardcover-list-<version>.zip` (from the
+   plugin from file** and select `hardcover-sync-<version>.zip` (from the
    [Releases](../../releases) page, or build it yourself — see Development).
 2. **Restart Calibre — first time (for the plugin).** This loads Hardcover Sync
    and registers it in the context menu.
@@ -196,9 +196,9 @@ Tags use Calibre's built-in **Tags** field — no column is created.
 ## Project layout
 
 ```text
-src/hardcover_list/     Calibre plugin package (sync UI, config, cull ISBN)
+src/hardcover_sync/     Calibre plugin package (sync UI, config, cull ISBN)
 lib/graphql/            Bundled Hardcover GraphQL client (module: hcl_graphql)
-scripts/bundle.sh       Builds dist/hardcover-list-<version>.zip
+scripts/bundle.sh       Builds dist/hardcover-sync-<version>.zip
 ```
 
 The bundled GraphQL client (`hcl_graphql/`) is included in the plugin zip at
@@ -212,14 +212,14 @@ Requires [mise](https://mise.jdx.dev/), [uv](https://docs.astral.sh/uv/), and
 
 ```bash
 just install        # set up the dev environment
-just build          # build dist/hardcover-list-<version>.zip
+just build          # build dist/hardcover-sync-<version>.zip
 just install-plugin # build and add the plugin to Calibre
 just test           # lib/graphql unit tests
 just lint
-just bump           # creates a hardcover-list-x.y.z git tag
+just bump           # creates a hardcover-sync-x.y.z git tag
 ```
 
-Release tags use the prefix `hardcover-list-` (for example `hardcover-list-0.1.0`).
+Release tags use the prefix `hardcover-sync-` (for example `hardcover-sync-0.2.0`).
 
 ## License
 

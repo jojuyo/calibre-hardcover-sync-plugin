@@ -3,9 +3,9 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hardcover-list-graphql"
+name = "hardcover-sync-graphql"
 version = "0.1.0"
-description = "GraphQL client for the Hardcover List Calibre plugin"
+description = "GraphQL client for the Hardcover Sync Calibre plugin"
 readme = "README.md"
 authors = [{ name = "Juan York" }]
 requires-python = ">=3.9"

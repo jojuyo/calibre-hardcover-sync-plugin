@@ -2,12 +2,12 @@ import json
 import os
 
 from calibre.utils.config import JSONConfig
-from calibre_plugins.hardcover_list.hcl_graphql.client import (
+from calibre_plugins.hardcover_sync.hcl_graphql.client import (
     DEFAULT_REQUESTS_PER_MINUTE,
     get_configured_requests_per_minute,
 )
 
-PLUGIN_PREFS = JSONConfig("plugins/Hardcover Lists.json")
+PLUGIN_PREFS = JSONConfig("plugins/Hardcover Sync.json")
 METADATA_PREFS = JSONConfig("metadata_sources/Hardcover.json")
 
 PLUGIN_PREFS.defaults["api_key"] = ""

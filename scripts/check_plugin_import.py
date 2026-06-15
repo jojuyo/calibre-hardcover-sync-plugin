@@ -1,4 +1,4 @@
-"""Smoke-test that the installed Hardcover Lists plugin imports the way Calibre
+"""Smoke-test that the installed Hardcover Sync plugin imports the way Calibre
 actually imports it.
 
 Run with Calibre's bundled Python so the real zip-plugin importer is used::
@@ -22,19 +22,19 @@ def main() -> int:
     list(ui.initialized_plugins())
 
     try:
-        from calibre_plugins.hardcover_list.ui import HardcoverListsAction
+        from calibre_plugins.hardcover_sync.ui import HardcoverSyncAction
     except Exception:
         traceback.print_exc()
         return 1
 
-    print("SUCCESS", HardcoverListsAction.name)
-    if HardcoverListsAction.name != "Hardcover Sync":
-        print("unexpected action name:", HardcoverListsAction.name)
+    print("SUCCESS", HardcoverSyncAction.name)
+    if HardcoverSyncAction.name != "Hardcover Sync":
+        print("unexpected action name:", HardcoverSyncAction.name)
         return 1
 
     # The bundled client must be reachable through the plugin namespace, not as a
     # bare top-level package (which would collide with the metadata plugin).
-    from calibre_plugins.hardcover_list.hcl_graphql.client import (
+    from calibre_plugins.hardcover_sync.hcl_graphql.client import (
         DEFAULT_REQUESTS_PER_MINUTE,
     )
 

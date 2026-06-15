@@ -3,21 +3,21 @@ requires = ["setuptools", "versioningit"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hardcover-list"
+name = "hardcover-sync"
 dynamic = ["version"]
-description = "Hardcover list membership and ISBN tools for Calibre"
+description = "Two-way Hardcover sync (lists, ratings, reviews, status, notes, quotes, tags) and ISBN tools for Calibre"
 readme = "README.md"
 authors = [{ name = "Juan York" }]
 license = "GPL-3.0"
 requires-python = ">=3.9"
-dependencies = ["hardcover-list-graphql"]
+dependencies = ["hardcover-sync-graphql"]
 
 [project.urls]
 Homepage = "https://hardcover.app/"
 Documentation = "https://docs.hardcover.app/"
 
 [tool.uv.sources]
-hardcover-list-graphql = { path = "lib/graphql" }
+hardcover-sync-graphql = { path = "lib/graphql" }
 
 [dependency-groups]
 dev = [
@@ -34,19 +34,19 @@ dev = [
 ]
 
 [tool.versioningit.vcs]
-default-tag = "hardcover-list-0.0.0"
-match = ["hardcover-list-*"]
+default-tag = "hardcover-sync-0.0.0"
+match = ["hardcover-sync-*"]
 decribe-subst = ""
 
 [tool.versioningit.tag2version]
-rmprefix = "hardcover-list-"
+rmprefix = "hardcover-sync-"
 
 [tool.versioningit.write]
 template = '''
 __version__ = "{version}"
 __version_tuple__ = {version_tuple}
 '''
-file = "src/hardcover_list/_version.py"
+file = "src/hardcover_sync/_version.py"
 
 [tool.setuptools.packages.find]
 where = ["src"]

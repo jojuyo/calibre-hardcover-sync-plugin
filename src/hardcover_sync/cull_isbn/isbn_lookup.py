@@ -3,10 +3,10 @@ from dataclasses import dataclass
 from urllib import error, parse, request
 
 from calibre.ebooks.metadata import check_isbn
-from calibre_plugins.hardcover_list.hcl_graphql.client import GraphQLClient
+from calibre_plugins.hardcover_sync.hcl_graphql.client import GraphQLClient
 
-from calibre_plugins.hardcover_list._version import __version__
-from calibre_plugins.hardcover_list.config import get_api_key
+from calibre_plugins.hardcover_sync._version import __version__
+from calibre_plugins.hardcover_sync.config import get_api_key
 
 API_URL = "https://api.hardcover.app/v1/graphql"
 
@@ -110,7 +110,7 @@ def _authors_from_contributors(contributors) -> str:
 
 
 def _lookup_hardcover(isbn: str, api_key: str) -> list[IsbnLookupResult]:
-    useragent = f"hardcover-list-calibre-plugin/{__version__}"
+    useragent = f"hardcover-sync-calibre-plugin/{__version__}"
     client = GraphQLClient(API_URL, useragent)
     client.set_token(api_key)
     data = client.execute(LOOKUP_BY_ISBN, {"isbn": isbn})

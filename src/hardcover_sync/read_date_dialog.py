@@ -12,7 +12,7 @@ from qt.core import (
     QWidget,
 )
 
-from calibre_plugins.hardcover_list.lists import UNKNOWN_READ_DATE
+from calibre_plugins.hardcover_sync.lists import UNKNOWN_READ_DATE
 
 
 class ReadDateDialog(QDialog):
