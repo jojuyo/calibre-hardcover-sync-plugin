@@ -30,6 +30,12 @@ query LookupEditionByIsbn($isbn: String!) {
       format
     }
     cached_contributors
+    image {
+      url
+    }
+    publisher {
+      name
+    }
     book {
       title
     }
@@ -47,6 +53,8 @@ class IsbnLookupResult:
     work_title: str | None = None
     isbn_10: str | None = None
     isbn_13: str | None = None
+    publisher: str | None = None
+    cover_url: str | None = None
 
 
 def isbn10_to_isbn13(isbn10: str) -> str | None:
@@ -66,12 +74,27 @@ def _normalized_isbn(value: str | None) -> str | None:
     return check_isbn(str(value))
 
 
-def _format_label(edition_format: str | None, reading_format: str | None) -> str:
-    if edition_format:
-        return edition_format.replace("_", " ").title()
-    if reading_format:
-        return reading_format.replace("_", " ").title()
-    return _("Unknown")
+def simplify_format(
+    edition_format: str | None, reading_format: str | None
+) -> str:
+    """Collapse Hardcover's many formats into Book / Audio Book / E-Book.
+
+    Hardcover's ``reading_format`` is one of Read / Listened / Ebook / Both,
+    and ``edition_format`` is free text (Paperback, Mass Market, Audio CD, …).
+    """
+    rf = (reading_format or "").strip().lower()
+    ef = (edition_format or "").strip().lower()
+    if rf == "listened" or "audio" in ef:
+        return _("Audio Book")
+    if (
+        rf == "ebook"
+        or "ebook" in ef
+        or "e-book" in ef
+        or "kindle" in ef
+        or "digital" in ef
+    ):
+        return _("E-Book")
+    return _("Book")
 
 
 def _authors_from_contributors(contributors) -> str:
@@ -106,13 +129,15 @@ def _lookup_hardcover(isbn: str, api_key: str) -> list[IsbnLookupResult]:
             IsbnLookupResult(
                 title=edition.get("title") or book.get("title") or _("Unknown"),
                 authors=_authors_from_contributors(edition.get("cached_contributors")),
-                format_type=_format_label(
+                format_type=simplify_format(
                     edition.get("edition_format"), reading_format
                 ),
                 source="Hardcover",
                 work_title=book.get("title"),
                 isbn_10=isbn_10,
                 isbn_13=isbn_13,
+                publisher=(edition.get("publisher") or {}).get("name"),
+                cover_url=(edition.get("image") or {}).get("url"),
             )
         )
     return results
@@ -130,7 +155,7 @@ def _lookup_open_library(isbn: str) -> IsbnLookupResult | None:
         )
     )
     try:
-        with request.urlopen(url, timeout=20) as response:
+        with request.urlopen(url, timeout=20) as response:  # noqa: S310
             payload = json.load(response)
     except error.URLError:
         return None
@@ -149,13 +174,19 @@ def _lookup_open_library(isbn: str) -> IsbnLookupResult | None:
     isbn_13 = normalized if normalized and len(normalized) == 13 else None
     if isbn_10 and not isbn_13:
         isbn_13 = isbn10_to_isbn13(isbn_10)
+    publishers = entry.get("publishers") or []
+    publisher = publishers[0].get("name") if publishers else None
+    cover = entry.get("cover") or {}
+    cover_url = cover.get("medium") or cover.get("large") or cover.get("small")
     return IsbnLookupResult(
         title=entry.get("title") or _("Unknown"),
         authors=authors or _("Unknown"),
-        format_type=_("Unknown"),
+        format_type=simplify_format(entry.get("physical_format"), None),
         source="Open Library",
         isbn_10=isbn_10,
         isbn_13=isbn_13,
+        publisher=publisher,
+        cover_url=cover_url,
     )
 
 
@@ -174,33 +205,7 @@ def lookup_isbn(isbn: str) -> list[IsbnLookupResult]:
         raise LookupError(
             _(
                 "No match found. Configure a Hardcover API key in the "
-                "Hardcover Lists or Hardcover metadata plugin for richer results."
+                "Hardcover Sync or Hardcover metadata plugin for richer results."
             )
         )
     raise LookupError(_("No book found for ISBN {isbn}.").format(isbn=isbn))
-
-
-def format_lookup_results(results: list[IsbnLookupResult], searched_isbn: str) -> str:
-    searched = check_isbn(searched_isbn) or searched_isbn
-    blocks = []
-    for index, result in enumerate(results, start=1):
-        lines = [
-            _("Title: {title}").format(title=result.title),
-            _("Authors: {authors}").format(authors=result.authors),
-            _("Format: {format_type}").format(format_type=result.format_type),
-        ]
-        if len(searched) == 10:
-            isbn_13 = result.isbn_13 or isbn10_to_isbn13(searched)
-            if isbn_13 and isbn_13 != searched:
-                lines.append(_("ISBN-13: {isbn}").format(isbn=isbn_13))
-        if result.work_title and result.work_title != result.title:
-            lines.insert(
-                1,
-                _("Work: {title}").format(title=result.work_title),
-            )
-        lines.append(_("Source: {source}").format(source=result.source))
-        if len(results) > 1:
-            blocks.append(_("Match {index}").format(index=index) + "\n" + "\n".join(lines))
-        else:
-            blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)

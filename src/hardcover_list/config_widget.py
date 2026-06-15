@@ -1,8 +1,11 @@
-from qt.core import QLabel, QLineEdit, QSpinBox, QVBoxLayout, QWidget
+from qt.core import QCheckBox, QLabel, QLineEdit, QSpinBox, QVBoxLayout, QWidget
 
 from .config import (
     PLUGIN_PREFS,
+    get_auto_push,
     get_requests_per_minute,
+    set_auto_push,
+    set_auto_push_prompted,
     sync_rate_limit_config,
 )
 
@@ -36,9 +39,24 @@ class ConfigWidget(QWidget):
         )
         layout.addWidget(self.requests_per_minute)
 
+        self.auto_push = QCheckBox(
+            _("Automatically push column edits to Hardcover"), self
+        )
+        self.auto_push.setChecked(get_auto_push())
+        self.auto_push.setToolTip(
+            _(
+                "When enabled, editing a book's rating, review, status, notes or "
+                "quotes pushes the change to Hardcover automatically."
+            )
+        )
+        layout.addWidget(self.auto_push)
+
         layout.addStretch(1)
 
     def save_settings(self):
         PLUGIN_PREFS["api_key"] = self.api_key.text().strip()
         PLUGIN_PREFS["requests_per_minute"] = self.requests_per_minute.value()
+        set_auto_push(self.auto_push.isChecked())
+        # Configuring it explicitly counts as having answered the prompt.
+        set_auto_push_prompted(True)
         sync_rate_limit_config()

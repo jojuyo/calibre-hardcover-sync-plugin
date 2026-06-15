@@ -28,6 +28,9 @@ def main() -> int:
         return 1
 
     print("SUCCESS", HardcoverListsAction.name)
+    if HardcoverListsAction.name != "Hardcover Sync":
+        print("unexpected action name:", HardcoverListsAction.name)
+        return 1
 
     # The bundled client must be reachable through the plugin namespace, not as a
     # bare top-level package (which would collide with the metadata plugin).

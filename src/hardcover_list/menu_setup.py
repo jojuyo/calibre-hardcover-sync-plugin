@@ -2,8 +2,10 @@ from calibre.gui2 import gprefs
 
 from .config import PLUGIN_PREFS
 
-PLUGIN_ACTION_NAME = "Hardcover Lists"
-CULL_ISBN_ACTION_NAME = "Cull ISBN"
+PLUGIN_ACTION_NAME = "Hardcover Sync"
+# Names from earlier versions that should be replaced by the single
+# "Hardcover Sync" entry when migrating an existing context-menu layout.
+OBSOLETE_ACTION_NAMES = ("Hardcover Lists", "Cull ISBN")
 CONTEXT_MENU_KEYS = (
     "action-layout-context-menu",
     "action-layout-context-menu-split",
@@ -16,10 +18,17 @@ def _layout_actions(key: str) -> list:
 
 
 def _layout_with_action(actions: list) -> list:
-    updated = [a for a in actions if a != CULL_ISBN_ACTION_NAME]
+    # Remember where the old entries lived so the new one can take their place.
+    obsolete_index = next(
+        (i for i, a in enumerate(actions) if a in OBSOLETE_ACTION_NAMES),
+        None,
+    )
+    updated = [a for a in actions if a not in OBSOLETE_ACTION_NAMES]
     if PLUGIN_ACTION_NAME in updated:
         return updated
-    updated = list(updated)
+    if obsolete_index is not None:
+        updated.insert(min(obsolete_index, len(updated)), PLUGIN_ACTION_NAME)
+        return updated
     try:
         idx = updated.index("Remove Books")
         updated.insert(idx, PLUGIN_ACTION_NAME)
@@ -29,7 +38,7 @@ def _layout_with_action(actions: list) -> list:
 
 
 def ensure_context_menu_action(gui) -> bool:
-    """Add Hardcover Lists to the book context menu if it is missing."""
+    """Add Hardcover Sync to the book context menu if it is missing."""
     if PLUGIN_ACTION_NAME not in gui.iactions:
         return False
 

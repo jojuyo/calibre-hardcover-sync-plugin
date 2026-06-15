@@ -4,9 +4,10 @@ from ._version import __version_tuple__
 
 
 class HardcoverListPlugin(InterfaceActionBase):
-    name = "Hardcover Lists"
+    name = "Hardcover Sync"
     description = (
-        "Shows Hardcover list membership in book details and scans book text for ISBNs"
+        "Syncs Hardcover lists (and, soon, ratings, reviews, and progress) and "
+        "scans book text for ISBNs"
     )
     supported_platforms = ["windows", "osx", "linux"]
     author = "Juan York"

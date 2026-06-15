@@ -16,14 +16,42 @@ from .queries import (
     INSERT_LIST_BOOK,
     LIST_BOOK_ENTRIES,
     LIST_BOOK_ENTRY,
+    ALL_USER_JOURNALS,
+    ALL_USER_RATINGS,
+    ALL_USER_REVIEWS,
+    ALL_USER_STATUSES,
+    ALL_USER_TAGS,
+    JOURNAL_ENTRIES_FOR_BOOKS,
     LIST_MEMBERSHIP_BY_ID,
+    TAGGINGS_FOR_BOOKS,
+    USER_BOOK_IDS,
+    USER_BOOK_READS,
+    USER_BOOK_REVIEW_STATE,
     USER_LISTS,
 )
+
+# Default visibility for pushed journal entries: 1 == "Public" (matches the
+# privacy of typical Hardcover journal activity). Change to 3 for "Private".
+JOURNAL_PRIVACY_ID = 1
 
 # Page size for streaming all list_books. The whole library typically fits in
 # one or two pages, so the entire membership map costs only a few requests.
 LIST_BOOKS_PAGE_SIZE = 1000
 EDITION_RESOLVE_CHUNK = 500
+
+# Hardcover user_book_statuses: 3 == "Read". A fresh rating insert marks the
+# book as read, since rating a book implies it has been read.
+READ_STATUS_ID = 3
+
+# Sentinel finished_at meaning "unknown date": Hardcover renders a read with a
+# null finished_at as "?", so we clear the auto-created date instead of using a
+# placeholder year. Distinct from None, which means "leave today's date".
+UNKNOWN_READ_DATE = "unknown"
+
+# The free-form tag category that maps to Calibre's native tags field. Other
+# categories (Genre, Mood, Pace, Content Warning, …) are Hardcover-managed and
+# are preserved untouched by tag pushes.
+TAG_CATEGORY = "Tag"
 
 API_URL = "https://api.hardcover.app/v1/graphql"
 NO_API_KEY = "Configure Hardcover API key"
@@ -49,6 +77,97 @@ class ListMembershipSnapshot:
         if not names:
             return NOT_ON_LISTS
         return ", ".join(sorted(names))
+
+
+@dataclass
+class RatingSnapshot:
+    by_id: dict[int, float] = field(default_factory=dict)
+    by_slug: dict[str, float] = field(default_factory=dict)
+
+    def rating_for(
+        self, book_id: int | None, slug: str | None
+    ) -> float | None:
+        if book_id is not None and book_id in self.by_id:
+            return self.by_id[book_id]
+        if slug and slug in self.by_slug:
+            return self.by_slug[slug]
+        return None
+
+
+@dataclass
+class ReviewSnapshot:
+    by_id: dict[int, str] = field(default_factory=dict)
+    by_slug: dict[str, str] = field(default_factory=dict)
+
+    def review_for(
+        self, book_id: int | None, slug: str | None
+    ) -> str | None:
+        if book_id is not None and book_id in self.by_id:
+            return self.by_id[book_id]
+        if slug and slug in self.by_slug:
+            return self.by_slug[slug]
+        return None
+
+
+@dataclass
+class StatusSnapshot:
+    by_id: dict[int, int] = field(default_factory=dict)
+    by_slug: dict[str, int] = field(default_factory=dict)
+
+    def status_for(
+        self, book_id: int | None, slug: str | None
+    ) -> int | None:
+        if book_id is not None and book_id in self.by_id:
+            return self.by_id[book_id]
+        if slug and slug in self.by_slug:
+            return self.by_slug[slug]
+        return None
+
+
+@dataclass
+class TagSnapshot:
+    # book_id/slug -> ordered list of free-form ("Tag") tag names
+    by_id: dict[int, list[str]] = field(default_factory=dict)
+    by_slug: dict[str, list[str]] = field(default_factory=dict)
+
+    def tags_for(self, book_id: int | None, slug: str | None) -> list[str]:
+        if book_id is not None and book_id in self.by_id:
+            return self.by_id[book_id]
+        if slug and slug in self.by_slug:
+            return self.by_slug[slug]
+        return []
+
+
+def journal_entry_page(metadata) -> int | None:
+    """Extract a page number from a quote's position metadata, if present."""
+    if not isinstance(metadata, dict):
+        return None
+    position = metadata.get("position")
+    if not isinstance(position, dict):
+        return None
+    if position.get("type") != "pages":
+        return None
+    value = position.get("value")
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+@dataclass
+class JournalSnapshot:
+    # book_id/slug -> {"note": [entry, ...], "quote": [{"entry", "page"}, ...]}
+    by_id: dict[int, dict] = field(default_factory=dict)
+    by_slug: dict[str, dict] = field(default_factory=dict)
+
+    def entries_for(
+        self, book_id: int | None, slug: str | None, event: str
+    ) -> list:
+        if book_id is not None and book_id in self.by_id:
+            return self.by_id[book_id].get(event, [])
+        if slug and slug in self.by_slug:
+            return self.by_slug[slug].get(event, [])
+        return []
 
 
 def normalize_lists_display(value) -> str:
@@ -243,6 +362,953 @@ class HardcoverListsClient:
             offset += LIST_BOOKS_PAGE_SIZE
 
         return ListMembershipSnapshot(by_id=by_id, by_slug=by_slug)
+
+    def snapshot_user_ratings(self, timeout=30) -> "RatingSnapshot":
+        """Fetch every rated book for the user in a few paginated requests.
+
+        Returns a snapshot mapping Hardcover book ids and slugs to the user's
+        rating, so selected books can be matched locally instead of probing or
+        resolving each book one at a time.
+        """
+        if not self.client.token:
+            raise RuntimeError(NO_API_KEY)
+
+        user_id = self.current_user_id(timeout)
+        if user_id is None:
+            raise RuntimeError("Could not determine Hardcover user id")
+
+        by_id: dict[int, float] = {}
+        by_slug: dict[str, float] = {}
+        offset = 0
+        while True:
+            result = self.client.execute(
+                ALL_USER_RATINGS,
+                {
+                    "user_id": user_id,
+                    "limit": LIST_BOOKS_PAGE_SIZE,
+                    "offset": offset,
+                },
+                timeout,
+            )
+            rows = (result or {}).get("user_books") or []
+            for row in rows:
+                rating = row.get("rating")
+                if rating is None:
+                    continue
+                book_id = row.get("book_id")
+                if book_id is not None:
+                    by_id[int(book_id)] = float(rating)
+                slug = (row.get("book") or {}).get("slug")
+                if slug:
+                    by_slug[slug] = float(rating)
+            if len(rows) < LIST_BOOKS_PAGE_SIZE:
+                break
+            offset += LIST_BOOKS_PAGE_SIZE
+
+        return RatingSnapshot(by_id=by_id, by_slug=by_slug)
+
+    def user_book_ids(self, book_ids, timeout=30) -> dict[int, int]:
+        """Map Hardcover book ids to the user's existing user_book entry id."""
+        if not self.client.token:
+            raise RuntimeError(NO_API_KEY)
+        ids = [int(b) for b in book_ids if b is not None]
+        if not ids:
+            return {}
+
+        user_id = self.current_user_id(timeout)
+        if user_id is None:
+            raise RuntimeError("Could not determine Hardcover user id")
+
+        mapping: dict[int, int] = {}
+        for start in range(0, len(ids), EDITION_RESOLVE_CHUNK):
+            chunk = ids[start : start + EDITION_RESOLVE_CHUNK]
+            result = self.client.execute(
+                USER_BOOK_IDS,
+                {"user_id": user_id, "book_ids": chunk},
+                timeout,
+            )
+            for row in (result or {}).get("user_books") or []:
+                book_id = row.get("book_id")
+                entry_id = row.get("id")
+                if book_id is None or entry_id is None:
+                    continue
+                book_id = int(book_id)
+                if book_id not in mapping:
+                    mapping[book_id] = int(entry_id)
+        return mapping
+
+    def apply_read_dates(
+        self, user_book_ids, finished_at: str, timeout=30, chunk_size: int = 40
+    ) -> None:
+        """Retarget the auto-created "finished" read date for given user_books.
+
+        Marking a book as Read auto-creates a user_book_reads row dated today;
+        this rewrites that row's finished_at to ``finished_at`` (e.g. a specific
+        date the book was actually read). Passing :data:`UNKNOWN_READ_DATE`
+        clears the date entirely, which Hardcover renders as "?".
+        """
+        ids = [int(i) for i in user_book_ids if i]
+        if not ids or not finished_at:
+            return
+
+        clear = finished_at == UNKNOWN_READ_DATE
+
+        read_ids: list[int] = []
+        for start in range(0, len(ids), EDITION_RESOLVE_CHUNK):
+            chunk = ids[start : start + EDITION_RESOLVE_CHUNK]
+            result = self.client.execute(USER_BOOK_READS, {"ids": chunk}, timeout)
+            for row in (result or {}).get("user_book_reads") or []:
+                if row.get("id") is not None:
+                    read_ids.append(int(row["id"]))
+
+        for start in range(0, len(read_ids), chunk_size):
+            chunk = read_ids[start : start + chunk_size]
+            var_defs = [] if clear else ["$d: date"]
+            variables: dict = {} if clear else {"d": finished_at}
+            value = "null" if clear else "$d"
+            fields: list[str] = []
+            for offset, rid in enumerate(chunk):
+                idx = start + offset
+                var_defs.append(f"$id_{idx}: Int!")
+                variables[f"id_{idx}"] = rid
+                fields.append(
+                    f"  u{idx}: update_user_book_read(id: $id_{idx}, "
+                    f"object: {{id: $id_{idx}, action: \"finished\", "
+                    f"finished_at: {value}}}) {{ id error }}"
+                )
+            query = (
+                "mutation HardcoverBatchSetReadDates("
+                + ", ".join(var_defs)
+                + ") {\n"
+                + "\n".join(fields)
+                + "\n}"
+            )
+            try:
+                self.client.execute(query, variables, timeout)
+            except Exception:  # noqa: BLE001, S110 - best-effort date adjustment
+                pass
+
+    def push_ratings(
+        self, items: list[dict], timeout=30, chunk_size: int = 50,
+        read_finished_at: str | None = None,
+    ) -> list[dict]:
+        """Set Hardcover ratings for many books via batched aliased mutations.
+
+        Each item is a dict with ``book_id``, ``rating`` (0-5), an optional
+        ``user_book_id`` (update when present, otherwise insert), and a ``_book``
+        payload echoed back. Returns a list (same order) of dicts:
+        ``{"book": <_book>, "id": int | None, "error": str | None}``.
+
+        ``read_finished_at`` (when set) retargets the read date of any newly
+        inserted (Read) entries.
+        """
+        results: list[dict] = []
+        for start in range(0, len(items), chunk_size):
+            chunk = items[start : start + chunk_size]
+            var_defs: list[str] = []
+            fields: list[str] = []
+            variables: dict = {}
+            for offset, item in enumerate(chunk):
+                idx = start + offset
+                var_defs.append(f"$rating_{idx}: numeric")
+                variables[f"rating_{idx}"] = item["rating"]
+                if item.get("user_book_id"):
+                    var_defs.append(f"$id_{idx}: Int!")
+                    variables[f"id_{idx}"] = item["user_book_id"]
+                    fields.append(
+                        f"  r{idx}: update_user_book(id: $id_{idx}, "
+                        f"object: {{rating: $rating_{idx}}}) {{ id error }}"
+                    )
+                else:
+                    var_defs.append(f"$book_{idx}: Int!")
+                    variables[f"book_{idx}"] = item["book_id"]
+                    fields.append(
+                        f"  r{idx}: insert_user_book("
+                        f"object: {{book_id: $book_{idx}, rating: $rating_{idx}, "
+                        f"status_id: {READ_STATUS_ID}}}) "
+                        f"{{ id error }}"
+                    )
+            query = (
+                "mutation HardcoverBatchPushRatings("
+                + ", ".join(var_defs)
+                + ") {\n"
+                + "\n".join(fields)
+                + "\n}"
+            )
+
+            try:
+                data = self.client.execute(query, variables, timeout) or {}
+                request_error = None
+            except Exception as exc:  # noqa: BLE001 - reported per book below
+                data = {}
+                request_error = str(exc)
+
+            for offset, item in enumerate(chunk):
+                idx = start + offset
+                entry = data.get(f"r{idx}") if request_error is None else None
+                entry = entry or {}
+                entry_id = entry.get("id")
+                error = entry.get("error")
+                if request_error is not None:
+                    error = request_error
+                elif entry_id is None and error is None:
+                    error = "Hardcover did not save the rating"
+                results.append(
+                    {"book": item["_book"], "id": entry_id, "error": error}
+                )
+
+        if read_finished_at:
+            inserted = [
+                result["id"]
+                for result, item in zip(results, items)
+                if item.get("user_book_id") is None
+                and result["id"] is not None
+                and result["error"] is None
+            ]
+            self.apply_read_dates(inserted, read_finished_at, timeout)
+        return results
+
+    def snapshot_user_reviews(self, timeout=30) -> "ReviewSnapshot":
+        """Fetch every reviewed book for the user in a few paginated requests.
+
+        Returns a snapshot mapping Hardcover book ids and slugs to the user's
+        plain-text review, mirroring ``snapshot_user_ratings``.
+        """
+        if not self.client.token:
+            raise RuntimeError(NO_API_KEY)
+
+        user_id = self.current_user_id(timeout)
+        if user_id is None:
+            raise RuntimeError("Could not determine Hardcover user id")
+
+        by_id: dict[int, str] = {}
+        by_slug: dict[str, str] = {}
+        offset = 0
+        while True:
+            result = self.client.execute(
+                ALL_USER_REVIEWS,
+                {
+                    "user_id": user_id,
+                    "limit": LIST_BOOKS_PAGE_SIZE,
+                    "offset": offset,
+                },
+                timeout,
+            )
+            rows = (result or {}).get("user_books") or []
+            for row in rows:
+                review = row.get("review")
+                if not review:
+                    continue
+                book_id = row.get("book_id")
+                if book_id is not None:
+                    by_id[int(book_id)] = review
+                slug = (row.get("book") or {}).get("slug")
+                if slug:
+                    by_slug[slug] = review
+            if len(rows) < LIST_BOOKS_PAGE_SIZE:
+                break
+            offset += LIST_BOOKS_PAGE_SIZE
+
+        return ReviewSnapshot(by_id=by_id, by_slug=by_slug)
+
+    def review_states(self, book_ids, timeout=30) -> dict[int, dict]:
+        """Map book ids to the user's existing user_book id and reviewed_at."""
+        if not self.client.token:
+            raise RuntimeError(NO_API_KEY)
+        ids = [int(b) for b in book_ids if b is not None]
+        if not ids:
+            return {}
+
+        user_id = self.current_user_id(timeout)
+        if user_id is None:
+            raise RuntimeError("Could not determine Hardcover user id")
+
+        states: dict[int, dict] = {}
+        for start in range(0, len(ids), EDITION_RESOLVE_CHUNK):
+            chunk = ids[start : start + EDITION_RESOLVE_CHUNK]
+            result = self.client.execute(
+                USER_BOOK_REVIEW_STATE,
+                {"user_id": user_id, "book_ids": chunk},
+                timeout,
+            )
+            for row in (result or {}).get("user_books") or []:
+                book_id = row.get("book_id")
+                entry_id = row.get("id")
+                if book_id is None or entry_id is None:
+                    continue
+                book_id = int(book_id)
+                if book_id not in states:
+                    states[book_id] = {
+                        "id": int(entry_id),
+                        "reviewed_at": row.get("reviewed_at"),
+                    }
+        return states
+
+    def push_reviews(
+        self, items: list[dict], timeout=30, chunk_size: int = 50,
+        read_finished_at: str | None = None,
+    ) -> list[dict]:
+        """Set Hardcover reviews for many books via batched aliased mutations.
+
+        Each item is a dict with ``book_id``, ``review_slate`` (a Slate document
+        dict), an optional ``user_book_id`` (update when present, otherwise
+        insert), ``set_reviewed_at`` (stamp reviewed_at when True), and a
+        ``_book`` payload echoed back. Returns a list (same order) of dicts:
+        ``{"book": <_book>, "id": int | None, "error": str | None}``.
+
+        ``read_finished_at`` (when set) retargets the read date of any newly
+        inserted (Read) entries.
+        """
+        from datetime import date
+
+        reviewed_at = date.today().isoformat()
+        results: list[dict] = []
+        for start in range(0, len(items), chunk_size):
+            chunk = items[start : start + chunk_size]
+            var_defs: list[str] = []
+            fields: list[str] = []
+            variables: dict = {}
+            for offset, item in enumerate(chunk):
+                idx = start + offset
+                var_defs.append(f"$slate_{idx}: jsonb")
+                variables[f"slate_{idx}"] = item["review_slate"]
+                stamp = ""
+                if item.get("set_reviewed_at"):
+                    var_defs.append(f"$revat_{idx}: timestamp")
+                    variables[f"revat_{idx}"] = reviewed_at
+                    stamp = f", reviewed_at: $revat_{idx}"
+                if item.get("user_book_id"):
+                    var_defs.append(f"$id_{idx}: Int!")
+                    variables[f"id_{idx}"] = item["user_book_id"]
+                    fields.append(
+                        f"  r{idx}: update_user_book(id: $id_{idx}, "
+                        f"object: {{review_slate: $slate_{idx}{stamp}}}) "
+                        f"{{ id error }}"
+                    )
+                else:
+                    var_defs.append(f"$book_{idx}: Int!")
+                    variables[f"book_{idx}"] = item["book_id"]
+                    fields.append(
+                        f"  r{idx}: insert_user_book("
+                        f"object: {{book_id: $book_{idx}, "
+                        f"review_slate: $slate_{idx}, "
+                        f"status_id: {READ_STATUS_ID}{stamp}}}) "
+                        f"{{ id error }}"
+                    )
+            query = (
+                "mutation HardcoverBatchPushReviews("
+                + ", ".join(var_defs)
+                + ") {\n"
+                + "\n".join(fields)
+                + "\n}"
+            )
+
+            try:
+                data = self.client.execute(query, variables, timeout) or {}
+                request_error = None
+            except Exception as exc:  # noqa: BLE001 - reported per book below
+                data = {}
+                request_error = str(exc)
+
+            for offset, item in enumerate(chunk):
+                idx = start + offset
+                entry = data.get(f"r{idx}") if request_error is None else None
+                entry = entry or {}
+                entry_id = entry.get("id")
+                error = entry.get("error")
+                if request_error is not None:
+                    error = request_error
+                elif entry_id is None and error is None:
+                    error = "Hardcover did not save the review"
+                results.append(
+                    {"book": item["_book"], "id": entry_id, "error": error}
+                )
+
+        if read_finished_at:
+            inserted = [
+                result["id"]
+                for result, item in zip(results, items)
+                if item.get("user_book_id") is None
+                and result["id"] is not None
+                and result["error"] is None
+            ]
+            self.apply_read_dates(inserted, read_finished_at, timeout)
+        return results
+
+    def snapshot_user_statuses(self, timeout=30) -> "StatusSnapshot":
+        """Fetch every shelved book's status for the user in a few requests.
+
+        Returns a snapshot mapping Hardcover book ids and slugs to the user's
+        status_id, mirroring ``snapshot_user_ratings``.
+        """
+        if not self.client.token:
+            raise RuntimeError(NO_API_KEY)
+
+        user_id = self.current_user_id(timeout)
+        if user_id is None:
+            raise RuntimeError("Could not determine Hardcover user id")
+
+        by_id: dict[int, int] = {}
+        by_slug: dict[str, int] = {}
+        offset = 0
+        while True:
+            result = self.client.execute(
+                ALL_USER_STATUSES,
+                {
+                    "user_id": user_id,
+                    "limit": LIST_BOOKS_PAGE_SIZE,
+                    "offset": offset,
+                },
+                timeout,
+            )
+            rows = (result or {}).get("user_books") or []
+            for row in rows:
+                status_id = row.get("status_id")
+                if status_id is None:
+                    continue
+                book_id = row.get("book_id")
+                if book_id is not None:
+                    by_id[int(book_id)] = int(status_id)
+                slug = (row.get("book") or {}).get("slug")
+                if slug:
+                    by_slug[slug] = int(status_id)
+            if len(rows) < LIST_BOOKS_PAGE_SIZE:
+                break
+            offset += LIST_BOOKS_PAGE_SIZE
+
+        return StatusSnapshot(by_id=by_id, by_slug=by_slug)
+
+    def push_statuses(
+        self, items: list[dict], timeout=30, chunk_size: int = 50,
+        read_finished_at: str | None = None,
+    ) -> list[dict]:
+        """Set Hardcover reading statuses for many books via batched mutations.
+
+        Each item is a dict with ``book_id``, ``status_id``, an optional
+        ``user_book_id`` (update when present, otherwise insert), and a ``_book``
+        payload echoed back. Returns a list (same order) of dicts:
+        ``{"book": <_book>, "id": int | None, "error": str | None}``.
+
+        ``read_finished_at`` (when set) retargets the read date of entries newly
+        inserted with the Read status.
+        """
+        results: list[dict] = []
+        for start in range(0, len(items), chunk_size):
+            chunk = items[start : start + chunk_size]
+            var_defs: list[str] = []
+            fields: list[str] = []
+            variables: dict = {}
+            for offset, item in enumerate(chunk):
+                idx = start + offset
+                var_defs.append(f"$status_{idx}: Int!")
+                variables[f"status_{idx}"] = item["status_id"]
+                if item.get("user_book_id"):
+                    var_defs.append(f"$id_{idx}: Int!")
+                    variables[f"id_{idx}"] = item["user_book_id"]
+                    fields.append(
+                        f"  r{idx}: update_user_book(id: $id_{idx}, "
+                        f"object: {{status_id: $status_{idx}}}) {{ id error }}"
+                    )
+                else:
+                    var_defs.append(f"$book_{idx}: Int!")
+                    variables[f"book_{idx}"] = item["book_id"]
+                    fields.append(
+                        f"  r{idx}: insert_user_book("
+                        f"object: {{book_id: $book_{idx}, "
+                        f"status_id: $status_{idx}}}) {{ id error }}"
+                    )
+            query = (
+                "mutation HardcoverBatchPushStatuses("
+                + ", ".join(var_defs)
+                + ") {\n"
+                + "\n".join(fields)
+                + "\n}"
+            )
+
+            try:
+                data = self.client.execute(query, variables, timeout) or {}
+                request_error = None
+            except Exception as exc:  # noqa: BLE001 - reported per book below
+                data = {}
+                request_error = str(exc)
+
+            for offset, item in enumerate(chunk):
+                idx = start + offset
+                entry = data.get(f"r{idx}") if request_error is None else None
+                entry = entry or {}
+                entry_id = entry.get("id")
+                error = entry.get("error")
+                if request_error is not None:
+                    error = request_error
+                elif entry_id is None and error is None:
+                    error = "Hardcover did not save the status"
+                results.append(
+                    {"book": item["_book"], "id": entry_id, "error": error}
+                )
+
+        if read_finished_at:
+            inserted = [
+                result["id"]
+                for result, item in zip(results, items)
+                if item.get("user_book_id") is None
+                and item.get("status_id") == READ_STATUS_ID
+                and result["id"] is not None
+                and result["error"] is None
+            ]
+            self.apply_read_dates(inserted, read_finished_at, timeout)
+        return results
+
+    def snapshot_user_journals(self, timeout=30) -> "JournalSnapshot":
+        """Fetch all note/quote journal entries for the user, paginated.
+
+        Returns a snapshot mapping book ids and slugs to ordered note strings
+        and quote dicts ({"entry", "page"}).
+        """
+        if not self.client.token:
+            raise RuntimeError(NO_API_KEY)
+
+        user_id = self.current_user_id(timeout)
+        if user_id is None:
+            raise RuntimeError("Could not determine Hardcover user id")
+
+        by_id: dict[int, dict] = {}
+        by_slug: dict[str, dict] = {}
+        offset = 0
+        while True:
+            result = self.client.execute(
+                ALL_USER_JOURNALS,
+                {
+                    "user_id": user_id,
+                    "limit": LIST_BOOKS_PAGE_SIZE,
+                    "offset": offset,
+                },
+                timeout,
+            )
+            rows = (result or {}).get("reading_journals") or []
+            for row in rows:
+                event = row.get("event")
+                entry = row.get("entry")
+                if event not in ("note", "quote") or not entry:
+                    continue
+                if event == "quote":
+                    value = {
+                        "entry": entry,
+                        "page": journal_entry_page(row.get("metadata")),
+                    }
+                else:
+                    value = entry
+                book_id = row.get("book_id")
+                if book_id is not None:
+                    bucket = by_id.setdefault(
+                        int(book_id), {"note": [], "quote": []}
+                    )
+                    bucket[event].append(value)
+                slug = (row.get("book") or {}).get("slug")
+                if slug:
+                    bucket = by_slug.setdefault(slug, {"note": [], "quote": []})
+                    bucket[event].append(value)
+            if len(rows) < LIST_BOOKS_PAGE_SIZE:
+                break
+            offset += LIST_BOOKS_PAGE_SIZE
+
+        return JournalSnapshot(by_id=by_id, by_slug=by_slug)
+
+    def _journal_entries_for_books(
+        self, book_ids, event, timeout=30
+    ) -> dict[int, list[dict]]:
+        """Map book id -> existing entries [{id, entry, page}] for one event."""
+        ids = [int(b) for b in book_ids if b is not None]
+        if not ids:
+            return {}
+        user_id = self.current_user_id(timeout)
+        if user_id is None:
+            raise RuntimeError("Could not determine Hardcover user id")
+
+        entries: dict[int, list[dict]] = {}
+        for start in range(0, len(ids), EDITION_RESOLVE_CHUNK):
+            chunk = ids[start : start + EDITION_RESOLVE_CHUNK]
+            result = self.client.execute(
+                JOURNAL_ENTRIES_FOR_BOOKS,
+                {"user_id": user_id, "book_ids": chunk},
+                timeout,
+            )
+            for row in (result or {}).get("reading_journals") or []:
+                if row.get("event") != event:
+                    continue
+                book_id = row.get("book_id")
+                if book_id is None or row.get("id") is None:
+                    continue
+                entries.setdefault(int(book_id), []).append(
+                    {
+                        "id": int(row["id"]),
+                        "entry": row.get("entry") or "",
+                        "page": journal_entry_page(row.get("metadata")),
+                    }
+                )
+        return entries
+
+    @staticmethod
+    def _journal_key(event: str, entry: str, page) -> tuple:
+        normalized = " ".join((entry or "").split())
+        if event == "quote":
+            return (page, normalized)
+        return (normalized,)
+
+    def _insert_journals(
+        self, rows, timeout=30, chunk_size: int = 40
+    ) -> list[dict]:
+        """Insert many reading_journal entries via batched aliased mutations.
+
+        ``rows`` is a list of dicts with ``book_id``, ``event``, ``entry`` and
+        an optional ``page``. Returns a list (same order) of error strings or
+        None per row.
+        """
+        results: list[dict] = []
+        for start in range(0, len(rows), chunk_size):
+            chunk = rows[start : start + chunk_size]
+            var_defs: list[str] = []
+            fields: list[str] = []
+            variables: dict = {}
+            for offset, row in enumerate(chunk):
+                idx = start + offset
+                var_defs.append(f"$book_{idx}: Int!")
+                var_defs.append(f"$event_{idx}: String!")
+                var_defs.append(f"$entry_{idx}: String!")
+                var_defs.append(f"$meta_{idx}: jsonb")
+                var_defs.append(f"$priv_{idx}: Int!")
+                variables[f"book_{idx}"] = row["book_id"]
+                variables[f"event_{idx}"] = row["event"]
+                variables[f"entry_{idx}"] = row["entry"]
+                page = row.get("page")
+                if page is not None:
+                    variables[f"meta_{idx}"] = {
+                        "position": {"type": "pages", "value": int(page)}
+                    }
+                else:
+                    variables[f"meta_{idx}"] = {}
+                variables[f"priv_{idx}"] = JOURNAL_PRIVACY_ID
+                fields.append(
+                    f"  e{idx}: insert_reading_journal(object: {{"
+                    f"book_id: $book_{idx}, event: $event_{idx}, "
+                    f"entry: $entry_{idx}, metadata: $meta_{idx}, "
+                    f"privacy_setting_id: $priv_{idx}, tags: []}}) "
+                    f"{{ id errors }}"
+                )
+            query = (
+                "mutation HardcoverBatchInsertJournals("
+                + ", ".join(var_defs)
+                + ") {\n"
+                + "\n".join(fields)
+                + "\n}"
+            )
+            try:
+                data = self.client.execute(query, variables, timeout) or {}
+                request_error = None
+            except Exception as exc:  # noqa: BLE001 - reported per row below
+                data = {}
+                request_error = str(exc)
+            for offset, _row in enumerate(chunk):
+                idx = start + offset
+                entry = data.get(f"e{idx}") if request_error is None else None
+                entry = entry or {}
+                if request_error is not None:
+                    results.append(request_error)
+                elif entry.get("errors"):
+                    results.append(str(entry["errors"]))
+                elif entry.get("id") is None:
+                    results.append("Hardcover did not save the entry")
+                else:
+                    results.append(None)
+        return results
+
+    def _delete_journals(
+        self, ids, timeout=30, chunk_size: int = 40
+    ) -> dict[int, str | None]:
+        """Delete many reading_journal entries; returns id -> error (None ok)."""
+        results: dict[int, str | None] = {}
+        ids = [int(i) for i in ids]
+        for start in range(0, len(ids), chunk_size):
+            chunk = ids[start : start + chunk_size]
+            var_defs: list[str] = []
+            fields: list[str] = []
+            variables: dict = {}
+            for offset, jid in enumerate(chunk):
+                idx = start + offset
+                var_defs.append(f"$id_{idx}: Int!")
+                variables[f"id_{idx}"] = jid
+                fields.append(
+                    f"  d{idx}: delete_reading_journal(id: $id_{idx}) {{ id }}"
+                )
+            query = (
+                "mutation HardcoverBatchDeleteJournals("
+                + ", ".join(var_defs)
+                + ") {\n"
+                + "\n".join(fields)
+                + "\n}"
+            )
+            try:
+                data = self.client.execute(query, variables, timeout) or {}
+                request_error = None
+            except Exception as exc:  # noqa: BLE001 - reported per entry below
+                data = {}
+                request_error = str(exc)
+            for offset, jid in enumerate(chunk):
+                idx = start + offset
+                entry = data.get(f"d{idx}") if request_error is None else None
+                if entry and entry.get("id") is not None:
+                    results[jid] = None
+                elif request_error is not None:
+                    results[jid] = request_error
+                else:
+                    results[jid] = "Hardcover did not delete the entry"
+        return results
+
+    def push_journals(
+        self, event: str, items: list[dict], timeout=30
+    ) -> list[dict]:
+        """Reconcile each book's Notes/Quotes column with Hardcover.
+
+        ``items`` is a list of dicts with ``book_id``, ``desired`` (a list of
+        ``(entry_text, page)`` tuples; page is None for notes) and a ``_book``
+        payload. For each book, entries new to Hardcover are inserted and
+        entries removed from the column are deleted. Returns a list (same order)
+        of dicts: ``{"book", "inserted", "deleted", "error"}``.
+        """
+        book_ids = {item["book_id"] for item in items}
+        existing = self._journal_entries_for_books(book_ids, event, timeout)
+
+        insert_rows: list[dict] = []
+        insert_owner: list[int] = []  # index into items for each insert row
+        delete_ids: list[int] = []
+        delete_owner: dict[int, int] = {}  # journal id -> item index
+        per_item = [
+            {"book": item["_book"], "inserted": 0, "deleted": 0, "error": None}
+            for item in items
+        ]
+
+        for index, item in enumerate(items):
+            desired = item["desired"]
+            book_existing = existing.get(item["book_id"], [])
+            existing_keys = {}
+            for row in book_existing:
+                key = self._journal_key(event, row["entry"], row.get("page"))
+                existing_keys.setdefault(key, row["id"])
+            desired_keys = set()
+            for text, page in desired:
+                key = self._journal_key(event, text, page)
+                desired_keys.add(key)
+                if key not in existing_keys:
+                    insert_rows.append(
+                        {
+                            "book_id": item["book_id"],
+                            "event": event,
+                            "entry": text,
+                            "page": page,
+                        }
+                    )
+                    insert_owner.append(index)
+            for key, jid in existing_keys.items():
+                if key not in desired_keys:
+                    delete_ids.append(jid)
+                    delete_owner[jid] = index
+
+        insert_results = self._insert_journals(insert_rows, timeout)
+        delete_results = self._delete_journals(delete_ids, timeout)
+
+        for row_index, error in enumerate(insert_results):
+            owner = insert_owner[row_index]
+            if error is None:
+                per_item[owner]["inserted"] += 1
+            elif per_item[owner]["error"] is None:
+                per_item[owner]["error"] = error
+
+        for jid, error in delete_results.items():
+            owner = delete_owner[jid]
+            if error is None:
+                per_item[owner]["deleted"] += 1
+            elif per_item[owner]["error"] is None:
+                per_item[owner]["error"] = error
+
+        return per_item
+
+    def snapshot_user_tags(self, timeout=30) -> "TagSnapshot":
+        """Fetch every free-form ("Tag") tagging for the user, paginated.
+
+        Returns a snapshot mapping Hardcover book ids and slugs to the ordered
+        list of the user's free-form tag names, so selected books can be matched
+        locally instead of resolving each book one at a time.
+        """
+        if not self.client.token:
+            raise RuntimeError(NO_API_KEY)
+
+        user_id = self.current_user_id(timeout)
+        if user_id is None:
+            raise RuntimeError("Could not determine Hardcover user id")
+
+        by_id: dict[int, list[str]] = {}
+        by_slug: dict[str, list[str]] = {}
+        offset = 0
+        while True:
+            result = self.client.execute(
+                ALL_USER_TAGS,
+                {
+                    "user_id": user_id,
+                    "limit": LIST_BOOKS_PAGE_SIZE,
+                    "offset": offset,
+                },
+                timeout,
+            )
+            rows = (result or {}).get("taggings") or []
+            for row in rows:
+                name = (row.get("tag") or {}).get("tag")
+                if not name:
+                    continue
+                book_id = row.get("taggable_id")
+                if book_id is not None:
+                    by_id.setdefault(int(book_id), []).append(name)
+                slug = (row.get("book") or {}).get("slug")
+                if slug:
+                    by_slug.setdefault(slug, []).append(name)
+            if len(rows) < LIST_BOOKS_PAGE_SIZE:
+                break
+            offset += LIST_BOOKS_PAGE_SIZE
+
+        return TagSnapshot(by_id=by_id, by_slug=by_slug)
+
+    def _taggings_for_books(
+        self, book_ids, timeout=30
+    ) -> dict[int, list[dict]]:
+        """Map book id -> existing taggings [{tag, category, spoiler}] (all cats)."""
+        ids = [int(b) for b in book_ids if b is not None]
+        if not ids:
+            return {}
+        user_id = self.current_user_id(timeout)
+        if user_id is None:
+            raise RuntimeError("Could not determine Hardcover user id")
+
+        out: dict[int, list[dict]] = {}
+        for start in range(0, len(ids), EDITION_RESOLVE_CHUNK):
+            chunk = ids[start : start + EDITION_RESOLVE_CHUNK]
+            result = self.client.execute(
+                TAGGINGS_FOR_BOOKS,
+                {"user_id": user_id, "book_ids": chunk},
+                timeout,
+            )
+            for row in (result or {}).get("taggings") or []:
+                book_id = row.get("taggable_id")
+                tag = row.get("tag") or {}
+                name = tag.get("tag")
+                category = (tag.get("tag_category") or {}).get("category")
+                if book_id is None or not name or not category:
+                    continue
+                out.setdefault(int(book_id), []).append(
+                    {
+                        "tag": name,
+                        "category": category,
+                        "spoiler": bool(row.get("spoiler")),
+                    }
+                )
+        return out
+
+    def push_tags(
+        self, items: list[dict], timeout=30, chunk_size: int = 25
+    ) -> list[dict]:
+        """Sync each book's free-form tags to Hardcover via upsert_tags.
+
+        ``items`` is a list of dicts with ``book_id`` (Hardcover id), ``tags``
+        (a list of Calibre tag strings) and a ``_book`` payload. Because
+        upsert_tags replaces a book's entire tag set, existing structured
+        categories (Genre, Mood, …) are fetched and preserved; only the "Tag"
+        category is replaced with the supplied Calibre tags. Returns a list
+        (same order) of dicts: ``{"book", "error"}``.
+        """
+        if not self.client.token:
+            raise RuntimeError(NO_API_KEY)
+        if not items:
+            return []
+
+        existing = self._taggings_for_books(
+            {item["book_id"] for item in items}, timeout
+        )
+
+        # Build the merged tag list (preserved non-"Tag" + new "Tag") per book.
+        payloads: list[dict] = []
+        for item in items:
+            book_id = item["book_id"]
+            preserved = [
+                {
+                    "tag": row["tag"],
+                    "category": row["category"],
+                    "spoiler": row["spoiler"],
+                }
+                for row in existing.get(book_id, [])
+                if row["category"] != TAG_CATEGORY
+            ]
+            seen: set[str] = set()
+            tag_objs: list[dict] = []
+            for name in item.get("tags") or []:
+                name = (name or "").strip()
+                if not name or name.casefold() in seen:
+                    continue
+                seen.add(name.casefold())
+                tag_objs.append(
+                    {"tag": name, "category": TAG_CATEGORY, "spoiler": False}
+                )
+            payloads.append(
+                {
+                    "book_id": book_id,
+                    "tags": preserved + tag_objs,
+                    "_book": item.get("_book", {}),
+                }
+            )
+
+        results: list[dict] = []
+        for start in range(0, len(payloads), chunk_size):
+            chunk = payloads[start : start + chunk_size]
+            var_defs: list[str] = []
+            fields: list[str] = []
+            variables: dict = {}
+            for offset, row in enumerate(chunk):
+                idx = start + offset
+                var_defs.append(f"$id_{idx}: bigint!")
+                var_defs.append(f"$tags_{idx}: [BasicTag]!")
+                variables[f"id_{idx}"] = row["book_id"]
+                variables[f"tags_{idx}"] = row["tags"]
+                fields.append(
+                    f'  u{idx}: upsert_tags(id: $id_{idx}, type: "Book", '
+                    f"tags: $tags_{idx}) {{ tags {{ tag }} }}"
+                )
+            query = (
+                "mutation HardcoverBatchUpsertTags("
+                + ", ".join(var_defs)
+                + ") {\n"
+                + "\n".join(fields)
+                + "\n}"
+            )
+            try:
+                data = self.client.execute(query, variables, timeout) or {}
+                request_error = None
+            except Exception as exc:  # noqa: BLE001 - reported per book below
+                data = {}
+                request_error = str(exc)
+            if request_error is None and isinstance(data, dict) and data.get(
+                "errors"
+            ):
+                request_error = "; ".join(
+                    e.get("message", "") for e in data["errors"]
+                )
+            for offset, row in enumerate(chunk):
+                idx = start + offset
+                entry = data.get(f"u{idx}") if request_error is None else None
+                if request_error is not None:
+                    results.append({"book": row["_book"], "error": request_error})
+                elif entry is None:
+                    results.append(
+                        {"book": row["_book"], "error": "Hardcover did not save tags"}
+                    )
+                else:
+                    results.append({"book": row["_book"], "error": None})
+        return results
 
     def resolve_editions(
         self, edition_ids, timeout=30

@@ -12,6 +12,26 @@ METADATA_PREFS = JSONConfig("metadata_sources/Hardcover.json")
 
 PLUGIN_PREFS.defaults["api_key"] = ""
 PLUGIN_PREFS.defaults["requests_per_minute"] = DEFAULT_REQUESTS_PER_MINUTE
+PLUGIN_PREFS.defaults["auto_push"] = False
+PLUGIN_PREFS.defaults["auto_push_prompted"] = False
+
+
+def get_auto_push() -> bool:
+    """Whether edits to synced columns should push to Hardcover automatically."""
+    return bool(PLUGIN_PREFS.get("auto_push", False))
+
+
+def set_auto_push(value: bool) -> None:
+    PLUGIN_PREFS["auto_push"] = bool(value)
+
+
+def auto_push_prompted() -> bool:
+    """Whether the user has already been asked about auto-push behaviour."""
+    return bool(PLUGIN_PREFS.get("auto_push_prompted", False))
+
+
+def set_auto_push_prompted(value: bool) -> None:
+    PLUGIN_PREFS["auto_push_prompted"] = bool(value)
 
 
 def get_api_key() -> str:
