@@ -269,13 +269,6 @@ def has_hardcover_link(identifiers: dict) -> bool:
     return get_hardcover_book_ref(identifiers) is not None
 
 
-def format_list_names(lists: list[dict]) -> str:
-    matching = [entry["name"] for entry in lists if entry.get("list_books")]
-    if not matching:
-        return NOT_ON_LISTS
-    return ", ".join(matching)
-
-
 def _me_from_result(result: dict | None) -> dict | None:
     if not result:
         return None
@@ -299,26 +292,64 @@ class HardcoverListsClient:
         if book_id is None:
             return NO_IDENTIFIER, None
 
+        user_id = self.current_user_id(timeout)
+        if user_id is None:
+            return NO_API_KEY, None
+
         result = self.client.execute(
-            LIST_MEMBERSHIP_BY_ID, {"book_id": book_id}, timeout
+            LIST_MEMBERSHIP_BY_ID,
+            {"user_id": user_id, "book_id": book_id},
+            timeout,
         )
-        me = _me_from_result(result)
-        lists = (me or {}).get("lists") or []
-        return format_list_names(lists), book_id
+        names: list[str] = []
+        seen: set[str] = set()
+        for row in (result or {}).get("list_books") or []:
+            name = (row.get("list") or {}).get("name")
+            if name and name not in seen:
+                seen.add(name)
+                names.append(name)
+        return (", ".join(names) if names else NOT_ON_LISTS), book_id
 
     def fetch_user_lists(self, timeout=30) -> list[dict]:
         if not self.client.token:
             return []
 
-        result = self.client.execute(USER_LISTS, {}, timeout)
-        me = _me_from_result(result)
-        return (me or {}).get("lists") or []
+        user_id = self.current_user_id(timeout)
+        if user_id is None:
+            return []
+        return list(
+            self._iter_paginated(USER_LISTS, {"user_id": user_id}, "lists", timeout)
+        )
 
     def current_user_id(self, timeout=30) -> int | None:
         result = self.client.execute(CURRENT_USER_ID, {}, timeout)
         me = _me_from_result(result)
         user_id = (me or {}).get("id")
         return int(user_id) if user_id is not None else None
+
+    def _iter_paginated(
+        self, query, variables, root_key, timeout=30, page_size=LIST_BOOKS_PAGE_SIZE
+    ):
+        """Yield every row of a paginated query across all pages.
+
+        Hardcover caps some tables (``lists``, ``reading_journals``) at 100 rows
+        per response even when a larger ``limit`` is requested. Advancing the
+        offset by the number of rows actually returned — and stopping only on an
+        empty page — fetches everything regardless of that cap, instead of
+        assuming a short page means the end of the data.
+        """
+        offset = 0
+        while True:
+            result = self.client.execute(
+                query,
+                {**variables, "limit": page_size, "offset": offset},
+                timeout,
+            )
+            rows = (result or {}).get(root_key) or []
+            if not rows:
+                return
+            yield from rows
+            offset += len(rows)
 
     def snapshot_list_memberships(self, timeout=30) -> "ListMembershipSnapshot":
         """Fetch every list_books entry for the user in a few paginated requests.
@@ -335,31 +366,18 @@ class HardcoverListsClient:
 
         by_id: dict[int, set[str]] = {}
         by_slug: dict[str, set[str]] = {}
-        offset = 0
-        while True:
-            result = self.client.execute(
-                ALL_LIST_BOOKS,
-                {
-                    "user_id": user_id,
-                    "limit": LIST_BOOKS_PAGE_SIZE,
-                    "offset": offset,
-                },
-                timeout,
-            )
-            rows = (result or {}).get("list_books") or []
-            for row in rows:
-                name = (row.get("list") or {}).get("name")
-                if not name:
-                    continue
-                book_id = row.get("book_id")
-                if book_id is not None:
-                    by_id.setdefault(int(book_id), set()).add(name)
-                slug = (row.get("book") or {}).get("slug")
-                if slug:
-                    by_slug.setdefault(slug, set()).add(name)
-            if len(rows) < LIST_BOOKS_PAGE_SIZE:
-                break
-            offset += LIST_BOOKS_PAGE_SIZE
+        for row in self._iter_paginated(
+            ALL_LIST_BOOKS, {"user_id": user_id}, "list_books", timeout
+        ):
+            name = (row.get("list") or {}).get("name")
+            if not name:
+                continue
+            book_id = row.get("book_id")
+            if book_id is not None:
+                by_id.setdefault(int(book_id), set()).add(name)
+            slug = (row.get("book") or {}).get("slug")
+            if slug:
+                by_slug.setdefault(slug, set()).add(name)
 
         return ListMembershipSnapshot(by_id=by_id, by_slug=by_slug)
 
@@ -379,31 +397,18 @@ class HardcoverListsClient:
 
         by_id: dict[int, float] = {}
         by_slug: dict[str, float] = {}
-        offset = 0
-        while True:
-            result = self.client.execute(
-                ALL_USER_RATINGS,
-                {
-                    "user_id": user_id,
-                    "limit": LIST_BOOKS_PAGE_SIZE,
-                    "offset": offset,
-                },
-                timeout,
-            )
-            rows = (result or {}).get("user_books") or []
-            for row in rows:
-                rating = row.get("rating")
-                if rating is None:
-                    continue
-                book_id = row.get("book_id")
-                if book_id is not None:
-                    by_id[int(book_id)] = float(rating)
-                slug = (row.get("book") or {}).get("slug")
-                if slug:
-                    by_slug[slug] = float(rating)
-            if len(rows) < LIST_BOOKS_PAGE_SIZE:
-                break
-            offset += LIST_BOOKS_PAGE_SIZE
+        for row in self._iter_paginated(
+            ALL_USER_RATINGS, {"user_id": user_id}, "user_books", timeout
+        ):
+            rating = row.get("rating")
+            if rating is None:
+                continue
+            book_id = row.get("book_id")
+            if book_id is not None:
+                by_id[int(book_id)] = float(rating)
+            slug = (row.get("book") or {}).get("slug")
+            if slug:
+                by_slug[slug] = float(rating)
 
         return RatingSnapshot(by_id=by_id, by_slug=by_slug)
 
@@ -583,31 +588,18 @@ class HardcoverListsClient:
 
         by_id: dict[int, str] = {}
         by_slug: dict[str, str] = {}
-        offset = 0
-        while True:
-            result = self.client.execute(
-                ALL_USER_REVIEWS,
-                {
-                    "user_id": user_id,
-                    "limit": LIST_BOOKS_PAGE_SIZE,
-                    "offset": offset,
-                },
-                timeout,
-            )
-            rows = (result or {}).get("user_books") or []
-            for row in rows:
-                review = row.get("review")
-                if not review:
-                    continue
-                book_id = row.get("book_id")
-                if book_id is not None:
-                    by_id[int(book_id)] = review
-                slug = (row.get("book") or {}).get("slug")
-                if slug:
-                    by_slug[slug] = review
-            if len(rows) < LIST_BOOKS_PAGE_SIZE:
-                break
-            offset += LIST_BOOKS_PAGE_SIZE
+        for row in self._iter_paginated(
+            ALL_USER_REVIEWS, {"user_id": user_id}, "user_books", timeout
+        ):
+            review = row.get("review")
+            if not review:
+                continue
+            book_id = row.get("book_id")
+            if book_id is not None:
+                by_id[int(book_id)] = review
+            slug = (row.get("book") or {}).get("slug")
+            if slug:
+                by_slug[slug] = review
 
         return ReviewSnapshot(by_id=by_id, by_slug=by_slug)
 
@@ -750,31 +742,18 @@ class HardcoverListsClient:
 
         by_id: dict[int, int] = {}
         by_slug: dict[str, int] = {}
-        offset = 0
-        while True:
-            result = self.client.execute(
-                ALL_USER_STATUSES,
-                {
-                    "user_id": user_id,
-                    "limit": LIST_BOOKS_PAGE_SIZE,
-                    "offset": offset,
-                },
-                timeout,
-            )
-            rows = (result or {}).get("user_books") or []
-            for row in rows:
-                status_id = row.get("status_id")
-                if status_id is None:
-                    continue
-                book_id = row.get("book_id")
-                if book_id is not None:
-                    by_id[int(book_id)] = int(status_id)
-                slug = (row.get("book") or {}).get("slug")
-                if slug:
-                    by_slug[slug] = int(status_id)
-            if len(rows) < LIST_BOOKS_PAGE_SIZE:
-                break
-            offset += LIST_BOOKS_PAGE_SIZE
+        for row in self._iter_paginated(
+            ALL_USER_STATUSES, {"user_id": user_id}, "user_books", timeout
+        ):
+            status_id = row.get("status_id")
+            if status_id is None:
+                continue
+            book_id = row.get("book_id")
+            if book_id is not None:
+                by_id[int(book_id)] = int(status_id)
+            slug = (row.get("book") or {}).get("slug")
+            if slug:
+                by_slug[slug] = int(status_id)
 
         return StatusSnapshot(by_id=by_id, by_slug=by_slug)
 
@@ -873,43 +852,28 @@ class HardcoverListsClient:
 
         by_id: dict[int, dict] = {}
         by_slug: dict[str, dict] = {}
-        offset = 0
-        while True:
-            result = self.client.execute(
-                ALL_USER_JOURNALS,
-                {
-                    "user_id": user_id,
-                    "limit": LIST_BOOKS_PAGE_SIZE,
-                    "offset": offset,
-                },
-                timeout,
-            )
-            rows = (result or {}).get("reading_journals") or []
-            for row in rows:
-                event = row.get("event")
-                entry = row.get("entry")
-                if event not in ("note", "quote") or not entry:
-                    continue
-                if event == "quote":
-                    value = {
-                        "entry": entry,
-                        "page": journal_entry_page(row.get("metadata")),
-                    }
-                else:
-                    value = entry
-                book_id = row.get("book_id")
-                if book_id is not None:
-                    bucket = by_id.setdefault(
-                        int(book_id), {"note": [], "quote": []}
-                    )
-                    bucket[event].append(value)
-                slug = (row.get("book") or {}).get("slug")
-                if slug:
-                    bucket = by_slug.setdefault(slug, {"note": [], "quote": []})
-                    bucket[event].append(value)
-            if len(rows) < LIST_BOOKS_PAGE_SIZE:
-                break
-            offset += LIST_BOOKS_PAGE_SIZE
+        for row in self._iter_paginated(
+            ALL_USER_JOURNALS, {"user_id": user_id}, "reading_journals", timeout
+        ):
+            event = row.get("event")
+            entry = row.get("entry")
+            if event not in ("note", "quote") or not entry:
+                continue
+            if event == "quote":
+                value = {
+                    "entry": entry,
+                    "page": journal_entry_page(row.get("metadata")),
+                }
+            else:
+                value = entry
+            book_id = row.get("book_id")
+            if book_id is not None:
+                bucket = by_id.setdefault(int(book_id), {"note": [], "quote": []})
+                bucket[event].append(value)
+            slug = (row.get("book") or {}).get("slug")
+            if slug:
+                bucket = by_slug.setdefault(slug, {"note": [], "quote": []})
+                bucket[event].append(value)
 
         return JournalSnapshot(by_id=by_id, by_slug=by_slug)
 
@@ -927,12 +891,12 @@ class HardcoverListsClient:
         entries: dict[int, list[dict]] = {}
         for start in range(0, len(ids), EDITION_RESOLVE_CHUNK):
             chunk = ids[start : start + EDITION_RESOLVE_CHUNK]
-            result = self.client.execute(
+            for row in self._iter_paginated(
                 JOURNAL_ENTRIES_FOR_BOOKS,
                 {"user_id": user_id, "book_ids": chunk},
+                "reading_journals",
                 timeout,
-            )
-            for row in (result or {}).get("reading_journals") or []:
+            ):
                 if row.get("event") != event:
                     continue
                 book_id = row.get("book_id")
@@ -1147,31 +1111,18 @@ class HardcoverListsClient:
 
         by_id: dict[int, list[str]] = {}
         by_slug: dict[str, list[str]] = {}
-        offset = 0
-        while True:
-            result = self.client.execute(
-                ALL_USER_TAGS,
-                {
-                    "user_id": user_id,
-                    "limit": LIST_BOOKS_PAGE_SIZE,
-                    "offset": offset,
-                },
-                timeout,
-            )
-            rows = (result or {}).get("taggings") or []
-            for row in rows:
-                name = (row.get("tag") or {}).get("tag")
-                if not name:
-                    continue
-                book_id = row.get("taggable_id")
-                if book_id is not None:
-                    by_id.setdefault(int(book_id), []).append(name)
-                slug = (row.get("book") or {}).get("slug")
-                if slug:
-                    by_slug.setdefault(slug, []).append(name)
-            if len(rows) < LIST_BOOKS_PAGE_SIZE:
-                break
-            offset += LIST_BOOKS_PAGE_SIZE
+        for row in self._iter_paginated(
+            ALL_USER_TAGS, {"user_id": user_id}, "taggings", timeout
+        ):
+            name = (row.get("tag") or {}).get("tag")
+            if not name:
+                continue
+            book_id = row.get("taggable_id")
+            if book_id is not None:
+                by_id.setdefault(int(book_id), []).append(name)
+            slug = (row.get("book") or {}).get("slug")
+            if slug:
+                by_slug.setdefault(slug, []).append(name)
 
         return TagSnapshot(by_id=by_id, by_slug=by_slug)
 
@@ -1189,12 +1140,12 @@ class HardcoverListsClient:
         out: dict[int, list[dict]] = {}
         for start in range(0, len(ids), EDITION_RESOLVE_CHUNK):
             chunk = ids[start : start + EDITION_RESOLVE_CHUNK]
-            result = self.client.execute(
+            for row in self._iter_paginated(
                 TAGGINGS_FOR_BOOKS,
                 {"user_id": user_id, "book_ids": chunk},
+                "taggings",
                 timeout,
-            )
-            for row in (result or {}).get("taggings") or []:
+            ):
                 book_id = row.get("taggable_id")
                 tag = row.get("tag") or {}
                 name = tag.get("tag")
@@ -1469,24 +1420,13 @@ class HardcoverListsClient:
         entries: dict[int, list[int]] = {}
         if not book_ids:
             return entries
-        offset = 0
-        while True:
-            data = self.client.execute(
-                LIST_BOOK_ENTRIES,
-                {
-                    "list_id": list_id,
-                    "book_ids": book_ids,
-                    "limit": LIST_BOOKS_PAGE_SIZE,
-                    "offset": offset,
-                },
-                timeout,
-            ) or {}
-            rows = data.get("list_books") or []
-            for row in rows:
-                entries.setdefault(row["book_id"], []).append(row["id"])
-            if len(rows) < LIST_BOOKS_PAGE_SIZE:
-                break
-            offset += LIST_BOOKS_PAGE_SIZE
+        for row in self._iter_paginated(
+            LIST_BOOK_ENTRIES,
+            {"list_id": list_id, "book_ids": book_ids},
+            "list_books",
+            timeout,
+        ):
+            entries.setdefault(row["book_id"], []).append(row["id"])
         return entries
 
     def _delete_list_books(

@@ -17,33 +17,37 @@ query HardcoverListMembershipBySlug($book_slug: String!) {
 }
 """
 
+# Queried from the list_books side (filtered to the user's lists) rather than
+# iterating ``me { lists }``, so a book's membership is found even when the user
+# has more than 100 lists (the nested-array cap).
 LIST_MEMBERSHIP_BY_ID = """
-query HardcoverListMembershipById($book_id: Int!) {
-  me {
-    lists(order_by: {created_at: desc}) {
+query HardcoverListMembershipById($user_id: Int!, $book_id: Int!) {
+  list_books(
+    where: {list: {user_id: {_eq: $user_id}}, book_id: {_eq: $book_id}}
+    order_by: {id: asc}
+    limit: 1000
+  ) {
+    list {
       name
-      slug
-      list_books(
-        where: {book: {id: {_eq: $book_id}, editions: {}}}
-        limit: 1
-      ) {
-        book {
-          title
-        }
-      }
     }
   }
 }
 """
 
+# Paginated so users with more than Hardcover's per-query cap (100 lists) still
+# get every list. Uses the root ``lists`` query filtered to the user rather than
+# ``me { lists }``, whose nested array is subject to the same 100-row cap.
 USER_LISTS = """
-query HardcoverUserLists {
-  me {
-    lists(order_by: {created_at: desc}) {
-      id
-      name
-      slug
-    }
+query HardcoverUserLists($user_id: Int!, $limit: Int!, $offset: Int!) {
+  lists(
+    where: {user_id: {_eq: $user_id}}
+    order_by: {created_at: desc}
+    limit: $limit
+    offset: $offset
+  ) {
+    id
+    name
+    slug
   }
 }
 """
@@ -298,7 +302,12 @@ query HardcoverAllUserJournals($user_id: Int!, $limit: Int!, $offset: Int!) {
 # Existing note/quote entries for specific books, so a push can reconcile the
 # column against what is already on Hardcover.
 JOURNAL_ENTRIES_FOR_BOOKS = """
-query HardcoverJournalEntriesForBooks($user_id: Int!, $book_ids: [Int!]!) {
+query HardcoverJournalEntriesForBooks(
+  $user_id: Int!
+  $book_ids: [Int!]!
+  $limit: Int!
+  $offset: Int!
+) {
   reading_journals(
     where: {
       user_id: {_eq: $user_id}
@@ -307,6 +316,8 @@ query HardcoverJournalEntriesForBooks($user_id: Int!, $book_ids: [Int!]!) {
       entry: {_is_null: false}
     }
     order_by: {id: asc}
+    limit: $limit
+    offset: $offset
   ) {
     id
     book_id
@@ -350,13 +361,21 @@ query HardcoverAllUserTags($user_id: Int!, $limit: Int!, $offset: Int!) {
 # tag push can preserve structured categories (Genre, Mood, …) while replacing
 # only the free-form "Tag" entries (upsert_tags replaces the whole set).
 TAGGINGS_FOR_BOOKS = """
-query HardcoverTaggingsForBooks($user_id: Int!, $book_ids: [bigint!]!) {
+query HardcoverTaggingsForBooks(
+  $user_id: Int!
+  $book_ids: [bigint!]!
+  $limit: Int!
+  $offset: Int!
+) {
   taggings(
     where: {
       user_id: {_eq: $user_id}
       taggable_type: {_eq: "Book"}
       taggable_id: {_in: $book_ids}
     }
+    order_by: {id: asc}
+    limit: $limit
+    offset: $offset
   ) {
     taggable_id
     spoiler
