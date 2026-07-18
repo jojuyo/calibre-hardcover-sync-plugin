@@ -194,6 +194,7 @@ class HardcoverSyncAction(InterfaceAction):
         self.menu = QMenu(self.gui)
         self.qaction.setMenu(self.menu)
         self._menu_book_ids: list[int] = []
+        self._create_persistent_actions()
         self.menu.aboutToShow.connect(self._on_menu_about_to_show)
         self.menu.aboutToShow.connect(self._populate_context_menu)
 
@@ -208,6 +209,73 @@ class HardcoverSyncAction(InterfaceAction):
             return QIcon(I(name))
         except Exception:  # noqa: BLE001 - icon is cosmetic, never block
             return QIcon()
+
+    def _create_persistent_actions(self):
+        """Create the fixed push/pull actions once, each with a stable,
+        user-configurable keyboard shortcut.
+
+        Registering the actions through ``create_menu_action`` exposes them
+        under Preferences -> Advanced -> Keyboard shortcuts (group "Hardcover
+        Sync"), where the user can bind their own keys; no defaults are set so
+        nothing collides with Calibre's built-ins. The actions are parented to
+        the main GUI, so clearing the dynamic context menu on rebuild leaves
+        them (and their shortcuts) intact; they are re-added to the relevant
+        submenus each time the menu is shown.
+        """
+        specs = [
+            ("cull-isbn", _("Cull ISBN"), "identifiers.png",
+             self._start_cull_isbn, _("Hardcover Sync: Cull ISBN")),
+            ("push-rating", _("Push Rating"), "arrow-up.png",
+             self._start_push_rating, _("Hardcover Sync: Push Rating")),
+            ("pull-rating", _("Pull Rating"), "arrow-down.png",
+             self._start_pull_rating, _("Hardcover Sync: Pull Rating")),
+            ("push-review", _("Push Review"), "arrow-up.png",
+             self._start_push_review, _("Hardcover Sync: Push Review")),
+            ("pull-review", _("Pull Review"), "arrow-down.png",
+             self._start_pull_review, _("Hardcover Sync: Pull Review")),
+            ("push-status", _("Push Status"), "arrow-up.png",
+             self._start_push_status, _("Hardcover Sync: Push Status")),
+            ("pull-status", _("Pull Status"), "arrow-down.png",
+             self._start_pull_status, _("Hardcover Sync: Pull Status")),
+            ("push-note", _("Push Notes"), "arrow-up.png",
+             partial(self._start_push_journal, "note"),
+             _("Hardcover Sync: Push Notes")),
+            ("pull-note", _("Pull Notes"), "arrow-down.png",
+             partial(self._start_pull_journal, "note"),
+             _("Hardcover Sync: Pull Notes")),
+            ("push-quote", _("Push Quotes"), "arrow-up.png",
+             partial(self._start_push_journal, "quote"),
+             _("Hardcover Sync: Push Quotes")),
+            ("pull-quote", _("Pull Quotes"), "arrow-down.png",
+             partial(self._start_pull_journal, "quote"),
+             _("Hardcover Sync: Pull Quotes")),
+            ("push-tags", _("Push Tags"), "arrow-up.png",
+             self._start_push_tags, _("Hardcover Sync: Push Tags")),
+            ("pull-tags", _("Pull Tags"), "arrow-down.png",
+             self._start_pull_tags, _("Hardcover Sync: Pull Tags")),
+        ]
+        self._shortcut_actions = {}
+        for unique_name, label, icon, handler, shortcut_name in specs:
+            action = self.create_menu_action(
+                self.menu,
+                unique_name,
+                label,
+                shortcut=None,
+                description=shortcut_name,
+                shortcut_name=shortcut_name,
+                triggered=handler,
+            )
+            action.setIcon(self._icon(icon))
+            self._shortcut_actions[unique_name] = action
+        self.menu.clear()
+
+    def _add_sync_actions(self, menu, push_key: str, pull_key: str):
+        """Add the shared push/pull actions to a submenu, gated on an API key."""
+        has_token = bool(self._lists_client.client.token)
+        for key in (push_key, pull_key):
+            action = self._shortcut_actions[key]
+            action.setEnabled(has_token)
+            menu.addAction(action)
 
     def initialization_complete(self):
         ensure_plugin_prefs()
@@ -767,10 +835,9 @@ class HardcoverSyncAction(InterfaceAction):
             action.setEnabled(False)
             return
 
-        cull_action = self.menu.addAction(
-            self._icon("identifiers.png"), _("Cull ISBN")
-        )
-        cull_action.triggered.connect(self._start_cull_isbn)
+        cull_action = self._shortcut_actions["cull-isbn"]
+        cull_action.setEnabled(True)
+        self.menu.addAction(cull_action)
 
         self.menu.addSeparator()
         self._add_lists_menu()
@@ -783,105 +850,25 @@ class HardcoverSyncAction(InterfaceAction):
 
     def _add_ratings_menu(self):
         ratings_menu = self.menu.addMenu(self._icon("rating.png"), _("Ratings"))
-        has_token = bool(self._lists_client.client.token)
-
-        push_action = ratings_menu.addAction(
-            self._icon("arrow-up.png"), _("Push Rating")
-        )
-        if has_token:
-            push_action.triggered.connect(self._start_push_rating)
-        else:
-            push_action.setEnabled(False)
-
-        pull_action = ratings_menu.addAction(
-            self._icon("arrow-down.png"), _("Pull Rating")
-        )
-        if has_token:
-            pull_action.triggered.connect(self._start_pull_rating)
-        else:
-            pull_action.setEnabled(False)
+        self._add_sync_actions(ratings_menu, "push-rating", "pull-rating")
 
     def _add_reviews_menu(self):
         reviews_menu = self.menu.addMenu(
             self._icon("edit_input.png"), _("Reviews")
         )
-        has_token = bool(self._lists_client.client.token)
-
-        push_action = reviews_menu.addAction(
-            self._icon("arrow-up.png"), _("Push Review")
-        )
-        if has_token:
-            push_action.triggered.connect(self._start_push_review)
-        else:
-            push_action.setEnabled(False)
-
-        pull_action = reviews_menu.addAction(
-            self._icon("arrow-down.png"), _("Pull Review")
-        )
-        if has_token:
-            pull_action.triggered.connect(self._start_pull_review)
-        else:
-            pull_action.setEnabled(False)
+        self._add_sync_actions(reviews_menu, "push-review", "pull-review")
 
     def _add_status_menu(self):
         status_menu = self.menu.addMenu(self._icon("reader.png"), _("Status"))
-        has_token = bool(self._lists_client.client.token)
-
-        push_action = status_menu.addAction(
-            self._icon("arrow-up.png"), _("Push Status")
-        )
-        if has_token:
-            push_action.triggered.connect(self._start_push_status)
-        else:
-            push_action.setEnabled(False)
-
-        pull_action = status_menu.addAction(
-            self._icon("arrow-down.png"), _("Pull Status")
-        )
-        if has_token:
-            pull_action.triggered.connect(self._start_pull_status)
-        else:
-            pull_action.setEnabled(False)
+        self._add_sync_actions(status_menu, "push-status", "pull-status")
 
     def _add_tags_menu(self):
         tags_menu = self.menu.addMenu(self._icon("tags.png"), _("Tags"))
-        has_token = bool(self._lists_client.client.token)
-
-        push_action = tags_menu.addAction(
-            self._icon("arrow-up.png"), _("Push Tags")
-        )
-        if has_token:
-            push_action.triggered.connect(self._start_push_tags)
-        else:
-            push_action.setEnabled(False)
-
-        pull_action = tags_menu.addAction(
-            self._icon("arrow-down.png"), _("Pull Tags")
-        )
-        if has_token:
-            pull_action.triggered.connect(self._start_pull_tags)
-        else:
-            pull_action.setEnabled(False)
+        self._add_sync_actions(tags_menu, "push-tags", "pull-tags")
 
     def _add_journal_menu(self, title: str, kind: str, icon: str):
         menu = self.menu.addMenu(self._icon(icon), title)
-        has_token = bool(self._lists_client.client.token)
-
-        push_action = menu.addAction(
-            self._icon("arrow-up.png"), _("Push {title}").format(title=title)
-        )
-        if has_token:
-            push_action.triggered.connect(partial(self._start_push_journal, kind))
-        else:
-            push_action.setEnabled(False)
-
-        pull_action = menu.addAction(
-            self._icon("arrow-down.png"), _("Pull {title}").format(title=title)
-        )
-        if has_token:
-            pull_action.triggered.connect(partial(self._start_pull_journal, kind))
-        else:
-            pull_action.setEnabled(False)
+        self._add_sync_actions(menu, f"push-{kind}", f"pull-{kind}")
 
     def _add_lists_menu(self):
         lists_menu = self.menu.addMenu(
