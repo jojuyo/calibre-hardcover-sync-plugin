@@ -39,6 +39,12 @@ JOURNAL_PRIVACY_ID = 1
 LIST_BOOKS_PAGE_SIZE = 1000
 EDITION_RESOLVE_CHUNK = 500
 
+# Maximum aliased mutations Hardcover accepts in a single GraphQL request. Their
+# API caps top-level mutation fields per request (their servers run mutations
+# serially), so every batched push chunks its aliased mutations to this size.
+# Raise this if Hardcover relaxes the cap or ships bulk-update endpoints.
+MAX_MUTATIONS_PER_REQUEST = 5
+
 # Hardcover user_book_statuses: 3 == "Read". A fresh rating insert marks the
 # book as read, since rating a book implies it has been read.
 READ_STATUS_ID = 3
@@ -443,7 +449,8 @@ class HardcoverListsClient:
         return mapping
 
     def apply_read_dates(
-        self, user_book_ids, finished_at: str, timeout=30, chunk_size: int = 40
+        self, user_book_ids, finished_at: str, timeout=30,
+        chunk_size: int = MAX_MUTATIONS_PER_REQUEST,
     ) -> None:
         """Retarget the auto-created "finished" read date for given user_books.
 
@@ -494,7 +501,8 @@ class HardcoverListsClient:
                 pass
 
     def push_ratings(
-        self, items: list[dict], timeout=30, chunk_size: int = 50,
+        self, items: list[dict], timeout=30,
+        chunk_size: int = MAX_MUTATIONS_PER_REQUEST,
         read_finished_at: str | None = None,
     ) -> list[dict]:
         """Set Hardcover ratings for many books via batched aliased mutations.
@@ -637,7 +645,8 @@ class HardcoverListsClient:
         return states
 
     def push_reviews(
-        self, items: list[dict], timeout=30, chunk_size: int = 50,
+        self, items: list[dict], timeout=30,
+        chunk_size: int = MAX_MUTATIONS_PER_REQUEST,
         read_finished_at: str | None = None,
     ) -> list[dict]:
         """Set Hardcover reviews for many books via batched aliased mutations.
@@ -758,7 +767,8 @@ class HardcoverListsClient:
         return StatusSnapshot(by_id=by_id, by_slug=by_slug)
 
     def push_statuses(
-        self, items: list[dict], timeout=30, chunk_size: int = 50,
+        self, items: list[dict], timeout=30,
+        chunk_size: int = MAX_MUTATIONS_PER_REQUEST,
         read_finished_at: str | None = None,
     ) -> list[dict]:
         """Set Hardcover reading statuses for many books via batched mutations.
@@ -919,7 +929,7 @@ class HardcoverListsClient:
         return (normalized,)
 
     def _insert_journals(
-        self, rows, timeout=30, chunk_size: int = 40
+        self, rows, timeout=30, chunk_size: int = MAX_MUTATIONS_PER_REQUEST
     ) -> list[dict]:
         """Insert many reading_journal entries via batched aliased mutations.
 
@@ -986,7 +996,7 @@ class HardcoverListsClient:
         return results
 
     def _delete_journals(
-        self, ids, timeout=30, chunk_size: int = 40
+        self, ids, timeout=30, chunk_size: int = MAX_MUTATIONS_PER_REQUEST
     ) -> dict[int, str | None]:
         """Delete many reading_journal entries; returns id -> error (None ok)."""
         results: dict[int, str | None] = {}
@@ -1162,7 +1172,8 @@ class HardcoverListsClient:
         return out
 
     def push_tags(
-        self, items: list[dict], timeout=30, chunk_size: int = 25
+        self, items: list[dict], timeout=30,
+        chunk_size: int = MAX_MUTATIONS_PER_REQUEST
     ) -> list[dict]:
         """Sync each book's free-form tags to Hardcover via upsert_tags.
 
@@ -1339,7 +1350,7 @@ class HardcoverListsClient:
         list_id: int,
         books: list[dict],
         timeout=30,
-        chunk_size: int = 50,
+        chunk_size: int = MAX_MUTATIONS_PER_REQUEST,
     ) -> list[dict]:
         """Add many books to a list using batched GraphQL requests.
 
@@ -1430,7 +1441,8 @@ class HardcoverListsClient:
         return entries
 
     def _delete_list_books(
-        self, list_book_ids: list[int], timeout=30, chunk_size: int = 50
+        self, list_book_ids: list[int], timeout=30,
+        chunk_size: int = MAX_MUTATIONS_PER_REQUEST
     ) -> dict[int, str | None]:
         """Delete many list_book entries via batched aliased mutations.
 
@@ -1476,7 +1488,7 @@ class HardcoverListsClient:
         list_id: int,
         books: list[dict],
         timeout=30,
-        chunk_size: int = 50,
+        chunk_size: int = MAX_MUTATIONS_PER_REQUEST,
     ) -> list[dict]:
         """Remove many books from a list using batched GraphQL requests.
 
