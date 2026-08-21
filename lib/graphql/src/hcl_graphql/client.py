@@ -13,6 +13,36 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+class GraphQLError(RuntimeError):
+    """A GraphQL response reported an error (including auth/token failures).
+
+    Hardcover returns a top-level ``errors`` array for query/mutation problems
+    and a top-level ``error`` string (e.g. "Unable to verify token") when the
+    API token cannot be authenticated. Both used to be silently discarded,
+    surfacing as empty results with no explanation.
+    """
+
+
+def _extract_error_message(payload: dict) -> Optional[str]:
+    """Return a human-readable error from a GraphQL response, if any."""
+    errors = payload.get("errors")
+    if errors:
+        messages = []
+        for err in errors:
+            if isinstance(err, dict):
+                message = err.get("message")
+                if message:
+                    messages.append(str(message))
+            elif err:
+                messages.append(str(err))
+        return "; ".join(messages) if messages else "GraphQL request failed"
+    # Hardcover uses a top-level "error" string for token/auth failures.
+    top_error = payload.get("error")
+    if top_error and "data" not in payload:
+        return str(top_error)
+    return None
+
 # Hardcover documents ~60 req/min. Requests are serialized across Calibre
 # processes via a shared lock file under the Calibre config directory, so the
 # rate limit applies to this plugin and any other Hardcover plugin using the
@@ -182,7 +212,11 @@ class GraphQLClient:
         with request.urlopen(req, timeout=timeout) as res:  # noqa: S310
             payload = res.read()
             json_result = json.loads(payload.decode("utf-8"))
-            if "data" in json_result:
-                json_result = json_result.get("data")
         _record_request_completed()
+        if isinstance(json_result, dict):
+            message = _extract_error_message(json_result)
+            if message:
+                raise GraphQLError(message)
+            if "data" in json_result:
+                return json_result.get("data")
         return json_result

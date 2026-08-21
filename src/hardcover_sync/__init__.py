@@ -6,8 +6,9 @@ from ._version import __version_tuple__
 class HardcoverSyncPlugin(InterfaceActionBase):
     name = "Hardcover Sync"
     description = (
-        "Syncs Hardcover lists (and, soon, ratings, reviews, and progress) and "
-        "scans book text for ISBNs"
+        "Two-way sync between Calibre and Hardcover for lists, ratings, "
+        "reviews, reading status, notes, quotes, and tags, plus a Cull ISBN "
+        "tool that scans book text for ISBNs"
     )
     supported_platforms = ["windows", "osx", "linux"]
     author = "Juan York"
