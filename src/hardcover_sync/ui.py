@@ -3045,14 +3045,38 @@ class HardcoverSyncAction(InterfaceAction):
         db = self.gui.current_db.new_api
         identifiers = dict(db.field_for("identifiers", book_id))
         identifiers["isbn"] = isbn
+
+        # The dialog looked the ISBN up on Hardcover, so also record the
+        # Hardcover identifiers (same keys the Hardcover metadata plugin writes)
+        # to link the book directly, without a separate metadata download.
+        result = dialog.selected_result()
+        linked = False
+        if result is not None and getattr(result, "source", None) == "Hardcover":
+            if result.book_slug:
+                identifiers["hardcover"] = result.book_slug
+                identifiers["hardcover-slug"] = result.book_slug
+            if result.book_id is not None:
+                identifiers["hardcover-id"] = str(result.book_id)
+            if result.edition_id is not None:
+                identifiers["hardcover-edition"] = str(result.edition_id)
+            linked = bool(
+                result.book_slug
+                or result.book_id is not None
+                or result.edition_id is not None
+            )
+
         db.set_field("identifiers", {book_id: identifiers})
 
         title = db.field_for("title", book_id)
-        info_dialog(
-            self.gui,
-            _("Cull ISBN"),
-            _('Saved ISBN {isbn} on “{title}”.').format(isbn=isbn, title=title),
-        ).exec()
+        if linked:
+            message = _(
+                'Saved ISBN {isbn} and linked “{title}” to Hardcover.'
+            ).format(isbn=isbn, title=title)
+        else:
+            message = _('Saved ISBN {isbn} on “{title}”.').format(
+                isbn=isbn, title=title
+            )
+        info_dialog(self.gui, _("Cull ISBN"), message).exec()
 
     def _create_new_list(self):
         name, ok = QInputDialog.getText(

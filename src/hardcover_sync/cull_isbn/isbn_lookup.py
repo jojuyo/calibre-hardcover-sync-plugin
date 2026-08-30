@@ -22,6 +22,7 @@ query LookupEditionByIsbn($isbn: String!) {
     order_by: {users_count: desc_nulls_last}
     limit: 3
   ) {
+    id
     title
     isbn_10
     isbn_13
@@ -37,6 +38,8 @@ query LookupEditionByIsbn($isbn: String!) {
       name
     }
     book {
+      id
+      slug
       title
     }
   }
@@ -55,6 +58,12 @@ class IsbnLookupResult:
     isbn_13: str | None = None
     publisher: str | None = None
     cover_url: str | None = None
+    # Hardcover identifiers (only populated for Hardcover results), matching the
+    # keys the Hardcover metadata plugin writes: hardcover / hardcover-slug /
+    # hardcover-id / hardcover-edition.
+    edition_id: int | None = None
+    book_id: int | None = None
+    book_slug: str | None = None
 
 
 def isbn10_to_isbn13(isbn10: str) -> str | None:
@@ -72,6 +81,13 @@ def _normalized_isbn(value: str | None) -> str | None:
     if not value:
         return None
     return check_isbn(str(value))
+
+
+def _int_or_none(value) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def simplify_format(
@@ -138,6 +154,9 @@ def _lookup_hardcover(isbn: str, api_key: str) -> list[IsbnLookupResult]:
                 isbn_13=isbn_13,
                 publisher=(edition.get("publisher") or {}).get("name"),
                 cover_url=(edition.get("image") or {}).get("url"),
+                edition_id=_int_or_none(edition.get("id")),
+                book_id=_int_or_none(book.get("id")),
+                book_slug=book.get("slug"),
             )
         )
     return results

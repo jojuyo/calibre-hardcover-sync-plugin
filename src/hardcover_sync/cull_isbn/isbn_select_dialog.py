@@ -61,6 +61,7 @@ class IsbnSelectDialog(QDialog):
     def __init__(self, parent, found_isbns: list[FoundIsbn], prompt: str):
         super().__init__(parent)
         self._found_isbns = found_isbns
+        self._results: dict[int, object] = {}
         self._cancelled = Event()
         self._worker = None
         self.setWindowTitle(_("Cull ISBN"))
@@ -156,6 +157,10 @@ class IsbnSelectDialog(QDialog):
             return self._found_isbns[row].isbn
         return None
 
+    def selected_result(self):
+        """The looked-up edition for the selected row (None if unmatched)."""
+        return self._results.get(self.table.currentRow())
+
     def reject(self) -> None:
         self._cancelled.set()
         super().reject()
@@ -199,6 +204,7 @@ class IsbnSelectDialog(QDialog):
     def _apply_row(self, row: int, result) -> None:
         if self._cancelled.is_set() or row >= self.table.rowCount():
             return
+        self._results[row] = result
         if result is None:
             self.table.item(row, COL_TITLE).setText(_("No match found"))
             self.table.item(row, COL_AUTHOR).setText("")
